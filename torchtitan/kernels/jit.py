@@ -15,7 +15,7 @@ import torch
 from torch.utils.cpp_extension import load as load_cpp_extension
 
 
-_CPP_MODULE_PREFIX = "xma"
+_CPP_MODULE_PREFIX = "trainstation"
 _GLOBAL_RANK = int(os.getenv("RANK", 0))
 _WORLD_SIZE = int(os.getenv("WORLD_SIZE", 1))
 
@@ -32,7 +32,7 @@ def _get_cpp_function(
         extra_cuda_cflags = ["-O3", "-lineinfo"]
         extra_ldflags = None
         extra_include_paths = [
-            os.path.dirname(__file__),  # xma/include
+            os.path.dirname(__file__),  # trainstation/include
             os.path.dirname(os.path.dirname(__file__)) + "/cutlass/include",  # cutlass
             os.path.dirname(os.path.dirname(__file__)) + "/cutlass/tools/util/include",  # cutlass
         ]

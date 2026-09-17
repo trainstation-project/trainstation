@@ -19,7 +19,7 @@ from ..utils import get_boolean_env_variable
 from .config import AutotuneConfig
 
 
-_XMA_PRINT_AUTOTUNING = get_boolean_env_variable("XMA_PRINT_AUTOTUNING", False)
+_PRINT_AUTOTUNING = get_boolean_env_variable("PRINT_AUTOTUNING", False)
 _SEPARATOR = "."
 _DEFAULT_WARMUP_ITERATIONS = 5
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -128,7 +128,7 @@ class AutotunedFunction:
 
             self.function_cache[lookup_key] = best_config
 
-            if _XMA_PRINT_AUTOTUNING:
+            if _PRINT_AUTOTUNING:
                 print(
                     f"config {best_config} achieved the best time ({best_time:.3f} sec) for {lookup_key} for "
                     f"function {self.function.__name__}"
@@ -161,7 +161,7 @@ class AutotunedFunction:
             if not config.is_condition_valid(
                 **self._get_function_arguments(config=AutotuneConfig({}), args=args, kwargs=kwargs)
             ):
-                if _XMA_PRINT_AUTOTUNING:
+                if _PRINT_AUTOTUNING:
                     print(f"Skipping config {config} for function {self.function.__name__}")
 
                 continue
@@ -170,7 +170,7 @@ class AutotunedFunction:
                 **self._get_function_arguments(config=config, args=args, kwargs=kwargs),
             )
 
-            if _XMA_PRINT_AUTOTUNING:
+            if _PRINT_AUTOTUNING:
                 print(f"config {config} took {elapsed_time:.3f} sec for function {self.function.__name__}")
 
             timed_configs.append((config, elapsed_time))

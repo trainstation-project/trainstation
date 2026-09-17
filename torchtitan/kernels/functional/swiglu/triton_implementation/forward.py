@@ -10,7 +10,7 @@ import triton
 import triton.language as tl
 
 from ....math import ceil_divide
-from ....custom_op import xma_op
+from ....custom_op import trainstation_op
 from ....triton_utils import elementwise_2d_kernel, sigmoid
 
 
@@ -20,7 +20,7 @@ def _compute(g, u):
     return u * g * sigmoid(g)
 
 
-@xma_op(mutates_args={"y"})
+@trainstation_op(mutates_args={"y"})
 def _swiglu_forward_triton(g: torch.Tensor, u: torch.Tensor, y: torch.Tensor) -> None:
     B, H = g.size()
     GRID = lambda meta: (ceil_divide(B, meta["BLOCK_SIZE_B"]), ceil_divide(H, meta["BLOCK_SIZE_H"]))

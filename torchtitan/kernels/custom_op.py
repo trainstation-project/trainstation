@@ -72,7 +72,7 @@ class CustomOp(torch.autograd.Function, metaclass=_CustomOpMeta):
         return f"{cls.__name__}-{kernel_backend.value}"
 
 
-def xma_op(
+def trainstation_op(
     mutates_args: str | Iterable[str] = None,
     device_types: str | Sequence[str] | None = None,
     schema: str | None = None,

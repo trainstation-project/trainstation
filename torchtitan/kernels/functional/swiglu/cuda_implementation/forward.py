@@ -17,7 +17,7 @@ from cutlass import Float32, const_expr, range_constexpr
 
 from ....math import get_powers_of_2
 from ....autotuner import AutotuneConfig, autotune
-from ....custom_op import xma_op
+from ....custom_op import trainstation_op
 from ....cute_dsl_utils import (
     ElementwiseCUDAKernel,
     ElementwisePackedCUDAKernel,
@@ -71,7 +71,7 @@ def _get_autotune_configs() -> list[AutotuneConfig]:
     return configs
 
 
-@xma_op(mutates_args={"y"})
+@trainstation_op(mutates_args={"y"})
 @autotune(configs=_get_autotune_configs(), triggers={"g.size(1)", "g.dtype"})
 def _swiglu_forward_cuda(g: torch.Tensor, u: torch.Tensor, y: torch.Tensor, BLOCK_SIZE: int, M: int) -> None:
     N = g.size(1)
@@ -91,7 +91,7 @@ def _swiglu_forward_cuda(g: torch.Tensor, u: torch.Tensor, y: torch.Tensor, BLOC
     kernel([g, u], [y], stream)
 
 
-@xma_op(mutates_args={"y"})
+@trainstation_op(mutates_args={"y"})
 @autotune(configs=_get_autotune_configs(), triggers={"x.size(1)", "x.dtype"})
 def _swiglu_packed_forward_cuda(x: torch.Tensor, y: torch.Tensor, BLOCK_SIZE: int, M: int) -> None:
     N = x.size(1)

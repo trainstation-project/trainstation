@@ -8,7 +8,7 @@
 from .math import get_powers_of_2
 
 
-LIBRARY_NAME = "xma"
+LIBRARY_NAME = "trainstation"
 
 WARP_SIZE = 32
 LOG_WARP_SIZE = 5
