@@ -34,7 +34,6 @@ def qwen3_30b_a3b_mxfp8_fsdp8_ep8_b300() -> Trainer.Config:
     """Prepare a 100-step continued-pretraining sample with CUDA graph replay.
 
     Requires the model and C4 sample from scripts/prepare_qwen3_30b_b300.py.
-    See docs/qwen3_30b_b300.md for the B300 benchmark and its limitations.
     """
     root = Path(__file__).resolve().parents[1]
     assets = root / "assets/hf/Qwen3-30B-A3B"
