@@ -26,7 +26,7 @@ uv pip install --python "$env_dir/bin/python" \
     'nvidia-cutlass-dsl==4.5.2' apache-tvm-ffi \
     'nvidia-cuda-nvcc==13.0.88' 'nvidia-nvvm==13.0.88' 'nvidia-cuda-crt==13.0.88' \
     'nvidia-cuda-cccl==13.0.85' 'nvidia-cuda-profiler-api==13.0.85' \
-    pynvml cmake ninja wheel
+    pynvml cmake ninja wheel matplotlib
 
 export CUDA_HOME="$env_dir/lib/python3.12/site-packages/nvidia/cu13"
 export PATH="$env_dir/bin:$CUDA_HOME/bin:$PATH"

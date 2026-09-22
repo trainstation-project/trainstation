@@ -100,3 +100,26 @@ def qwen3_30b_a3b_mxfp8_fsdp8_ep8_b300() -> Trainer.Config:
             export_dtype="bfloat16",
         ),
     )
+
+
+def qwen3_30b_a3b_mxfp8_fsdp8_ep8_b300_1k() -> Trainer.Config:
+    """Run 1,000 steps on the larger C4 corpus with one final model save."""
+    root = Path(__file__).resolve().parents[1]
+    config = qwen3_30b_a3b_mxfp8_fsdp8_ep8_b300()
+    return replace(
+        config,
+        dump_folder=str(root / "outputs/qwen3_30b_mxfp8_1k/run"),
+        training=replace(config.training, steps=1000),
+        checkpoint=replace(config.checkpoint, interval=1000),
+        dataloader=GrainDataLoader.Config(
+            dataset=ConcatThenSplitPackingConfig(
+                dataset=SingleDatasetConfig(
+                    source=IndexedJsonlSource.Config(
+                        patterns=(str(root / "data/qwen3_30b_c4_1k/train.jsonl"),),
+                    ),
+                    processor=TextProcessor.Config(),
+                ),
+            ),
+            seed=42,
+        ),
+    )
