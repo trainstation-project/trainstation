@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Plot per-step loss and global tokens/day from TorchTitan TensorBoard events."""
+"""Plot per-step loss and global tokens/day from training TensorBoard events."""
 
 import argparse
 import csv
@@ -33,6 +33,9 @@ def main() -> None:
     parser.add_argument("--warmup-steps", type=int, default=10)
     parser.add_argument("--rolling-window", type=int, default=50)
     parser.add_argument("--title", default="TorchTitan training")
+    parser.add_argument("--loss-tag", default="loss_metrics/global_avg_loss")
+    parser.add_argument("--time-tag", default="time_metrics/end_to_end(s)")
+    parser.add_argument("--grad-norm-tag", default="grad_norm")
     parser.add_argument(
         "--run-details",
         default="Measured training metrics; throughput excludes the final checkpoint.",
@@ -69,9 +72,9 @@ def main() -> None:
             raise ValueError(f"Non-finite values in {tag}")
         return result
 
-    loss = values("loss_metrics/global_avg_loss")
-    seconds = values("time_metrics/end_to_end(s)")
-    grad_norm = values("grad_norm")
+    loss = values(args.loss_tag)
+    seconds = values(args.time_tag)
+    grad_norm = values(args.grad_norm_tag)
     if (seconds <= 0).any():
         raise ValueError("Step durations must be positive")
     daily_tokens = args.tokens_per_step * 86400 / seconds
