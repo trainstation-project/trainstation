@@ -34,7 +34,7 @@ def qwen3_30b_a3b_mxfp8_fsdp8_ep8_b300() -> Trainer.Config:
     """Prepare a 100-step continued-pretraining sample with CUDA graph replay.
 
     Requires the model and C4 sample from scripts/prepare_qwen3_30b_b300.py.
-    This recipe is not a measured B300 performance or convergence result.
+    See docs/qwen3_30b_b300.md for the B300 benchmark and its limitations.
     """
     root = Path(__file__).resolve().parents[1]
     assets = root / "assets/hf/Qwen3-30B-A3B"
@@ -46,7 +46,9 @@ def qwen3_30b_a3b_mxfp8_fsdp8_ep8_b300() -> Trainer.Config:
         converters=[
             MXFP8LinearConverter.Config(fqns=["attention"], model_compile_enabled=True),
             MXFP8GroupedExpertsConverter.Config(
-                recipe_name="mxfp8_rceil",
+                # The pinned scaled grouped-MM backward leaves empty-expert
+                # weight gradients uninitialized. Use TorchAO's BF16 WGRAD path.
+                recipe_name="mxfp8_rceil_wgrad_with_hp",
                 pad_multiple=128,
                 model_compile_enabled=True,
             ),

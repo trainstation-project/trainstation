@@ -41,7 +41,9 @@ def test_qwen3_b300_recipe_preserves_graph_and_precision_contracts(monkeypatch):
         assert "attention" in fqn
     experts = list(config.model_spec.model.traverse(GroupedExperts.Config))
     assert len(experts) == 48
-    assert all(expert.recipe_name == "mxfp8_rceil" for _, expert, _, _ in experts)
+    assert all(
+        expert.recipe_name == "mxfp8_rceil_wgrad_with_hp" for _, expert, _, _ in experts
+    )
     assert len(list(config.model_spec.model.traverse(RouterGateLinear.Config))) == 48
     dispatchers = [
         dispatcher
