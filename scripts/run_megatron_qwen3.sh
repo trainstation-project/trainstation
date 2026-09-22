@@ -7,6 +7,7 @@ set -euo pipefail
 
 TASK_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TASK_OUTPUT="$TASK_ROOT/outputs/megatron_comparison"
+TASK_RUN_OUTPUT=outputs/megatron_qwen3_30b_eager_full_recompute_100
 TASK_IMAGE=trainstation-megatron:qwen3-b300
 TASK_BASE=nvcr.io/nvidia/nemo@sha256:fdd6e9c7929b76c8624ddfea939dda345beaf67695d9c3994994c18f9e79b9bf
 BRIDGE_REV=7630ad82864f9e64ce957b323a2779856def2f62
@@ -27,9 +28,10 @@ container_args=(
     -e TOKENIZERS_PARALLELISM=false
     -e CUDA_DEVICE_MAX_CONNECTIONS=32
     -e OMP_NUM_THREADS=4
-    -e TORCHINDUCTOR_CACHE_DIR=/workspace/trainstation/outputs/megatron_qwen3_30b_100/inductor-cache
-    -e TRITON_CACHE_DIR=/workspace/trainstation/outputs/megatron_qwen3_30b_100/triton-cache
-    -e TORCH_EXTENSIONS_DIR=/workspace/trainstation/outputs/megatron_qwen3_30b_100/extension-cache
+    -e TASK_RUN_OUTPUT="$TASK_RUN_OUTPUT"
+    -e TORCHINDUCTOR_CACHE_DIR="/workspace/trainstation/$TASK_RUN_OUTPUT/inductor-cache"
+    -e TRITON_CACHE_DIR="/workspace/trainstation/$TASK_RUN_OUTPUT/triton-cache"
+    -e TORCH_EXTENSIONS_DIR="/workspace/trainstation/$TASK_RUN_OUTPUT/extension-cache"
     -e TASK_UID="$(id -u)" -e TASK_GID="$(id -g)"
 )
 
@@ -77,7 +79,7 @@ case "${1:-check}" in
     check)
         docker run --rm "${container_args[@]}" -e CUDA_VISIBLE_DEVICES='' \
             -e HF_HUB_OFFLINE=1 "$TASK_IMAGE" -lc \
-            'trap '\''chown -R "$TASK_UID:$TASK_GID" outputs/megatron_qwen3_30b_100'\'' EXIT
+            'trap '\''chown -R "$TASK_UID:$TASK_GID" "$TASK_RUN_OUTPUT"'\'' EXIT
              uv run --no-project python scripts/megatron_qwen3_b300.py'
         ;;
     train)
@@ -88,7 +90,7 @@ case "${1:-check}" in
             --ipc=host --network=host --ulimit memlock=-1 --ulimit stack=67108864 \
             "${container_args[@]}" -e CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
             -e HF_HUB_OFFLINE=1 "$TASK_IMAGE" -lc \
-            'trap '\''chown -R "$TASK_UID:$TASK_GID" outputs/megatron_qwen3_30b_100'\'' EXIT
+            'trap '\''chown -R "$TASK_UID:$TASK_GID" "$TASK_RUN_OUTPUT"'\'' EXIT
              ldconfig
              uv run --no-project python -m torch.distributed.run --standalone \
                 --nproc_per_node=8 scripts/megatron_qwen3_b300.py --train'

@@ -7,7 +7,7 @@
 """Prepare or explicitly launch the matched Qwen3 Megatron experiment.
 
 The default action validates preparation only. Training requires --train.
-CUDA graphs cover routing; attention and custom expert precision stay eager.
+Training runs eagerly with full, per-layer activation recomputation.
 """
 
 import argparse
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data/qwen3_30b_c4_megatron"
 MODEL = ROOT / "assets/hf/Qwen3-30B-A3B"
-OUTPUT = ROOT / "outputs/megatron_qwen3_30b_100"
+OUTPUT = ROOT / "outputs/megatron_qwen3_30b_eager_full_recompute_100"
 
 
 def quantizer_factory(role):
@@ -134,32 +134,6 @@ def layer_spec(config):
     return spec
 
 
-def capture_router(router):
-    # FSDP owns hooks on each transformer layer. Capture its hook-free router
-    # directly so parameter gather and gradient reduction remain outside graphs.
-    sample = torch.zeros(
-        (8192, 1, 2048),
-        device=router.weight.device,
-        dtype=torch.bfloat16,
-        requires_grad=True,
-    )
-    # Existing AccumulateGrad nodes retain the training stream after warmup.
-    # The pinned PyTorch API redirects them to the stream used for capture.
-    torch.autograd.graph.set_override_stale_capture_stream(True)
-    try:
-        torch.cuda.make_graphed_callables(router, (sample,), num_warmup_iters=3)
-    finally:
-        torch.autograd.graph.set_override_stale_capture_stream(False)
-    graphed_forward = router.forward
-
-    def forward(input_TBH, padding_mask=None):
-        # T: tokens; B: batch; H: hidden size. The exported stream has no padding.
-        assert padding_mask is None
-        return graphed_forward(input_TBH)
-
-    router.forward = forward
-
-
 class PackedBatches(Dataset):
     """Expose the exact exported per-rank stream to Megatron's single sampler."""
 
@@ -181,7 +155,7 @@ class PackedBatches(Dataset):
         row = self.ranks[rank]
         positions = np.array(row["positions"][step], dtype=np.int64)
         boundaries = np.flatnonzero(positions == 0)
-        # Fixed-size metadata lets attention graphs reuse the same allocations.
+        # Fixed-size metadata lets the collator stack document boundaries.
         cu_seqlens = np.full(self.manifest["max_documents"] + 1, 8192, np.int32)
         cu_seqlens[: len(boundaries)] = boundaries
         return {
@@ -250,16 +224,9 @@ class MatchedUpdates(Callback):
                     manager.config = replace(manager.config, fp8_recipe=Fp8Recipe.mxfp8)
 
     def on_train_step_start(self, context: CallbackContext):
-        if context.state.train_state.step == 3:
-            # FSDP replaces checkpoint DTensors with compute parameters on the
-            # first forward. Capture only after those parameter objects stabilize.
-            for router in self.routers(context):
-                capture_router(router)
-            logger.info("Captured forward/backward CUDA graphs for 48 routers")
         lr = learning_rate(context.state.train_state.step + 1)
         for group in context.optimizer.param_groups:
             group["lr"] = lr
-        # Discard counts produced by CUDA graph warmup and capture.
         for router in self.routers(context):
             router.local_tokens_per_expert.zero_()
 
@@ -312,16 +279,14 @@ def build_config():
     model.moe_router_pre_softmax = True
     model.hidden_dropout = 0.0
     model.attention_dropout = 0.0
-    # Stock layer graphs reject FSDP hooks, and attention replay rejects packed
-    # sequence metadata. Capture the hook-free routers directly in the callback.
     model.cuda_graph_impl = "none"
     model.cuda_graph_modules = []
     model.use_te_rng_tracker = True
-    # Recompute expert activations outside the router graphs to limit memory.
-    model.recompute_granularity = "selective"
-    model.recompute_modules = ["moe_act"]
-    model.recompute_method = None
-    model.recompute_num_layers = None
+    # Uniform chunks of one checkpoint every transformer layer, matching FullAC.
+    model.recompute_granularity = "full"
+    model.recompute_modules = []
+    model.recompute_method = "uniform"
+    model.recompute_num_layers = 1
     model.overlap_moe_expert_parallel_comm = False
     model.gradient_accumulation_fusion = True
     cfg.mixed_precision = bf16_mixed()
@@ -455,10 +420,11 @@ def check_preparation():
         "total_tokens": manifest["total_tokens"],
         "parallelism": {"fsdp": 8, "ep": 8, "tp": 1, "pp": 1, "cp": 1},
         "expert_wgrad": "BF16 original operands",
-        "cuda_graph_modules": ["moe_router (PyTorch forward and backward)"],
-        "activation_checkpointing": "selective moe_act; baseline used full",
+        "cuda_graph_modules": [],
+        "execution": "eager; torch.compile disabled by force_eager stance",
+        "activation_checkpointing": "full, uniform, one transformer layer per checkpoint",
         "parameter_sharding": "optim_grads: sharded FP32 master/gradients, retained compute weights",
-        "runtime_validation": "deferred: hardware validation, model loading, kernels, capture, numerics, memory",
+        "runtime_validation": "deferred: hardware validation, model loading, kernels, numerics, memory",
     }
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / "preparation.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -470,6 +436,8 @@ def main():
     parser.add_argument("--train", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
+    # Megatron decorates some helpers with torch.compile even without model graphs.
+    torch.compiler.set_stance("force_eager")
     if not args.train:
         check_preparation()
         return
