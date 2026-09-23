@@ -20,8 +20,8 @@ _SEED = 42
 
 _DEFAULT_TOLERANCES = {
     torch.float32: dict(atol=1e-5, rtol=1e-5),
-    torch.float16: dict(atol=1e-2, rtol=1e-2),
-    torch.bfloat16: dict(atol=1e-2, rtol=1e-2),
+    torch.float16: dict(atol=1e-5, rtol=1e-2),
+    torch.bfloat16: dict(atol=1e-5, rtol=1e-2),
 }
 
 _BACKEND_AVAILABILITY_CHECKS = {
