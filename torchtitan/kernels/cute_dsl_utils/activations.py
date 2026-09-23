@@ -7,8 +7,9 @@
 
 from __future__ import annotations
 
+import cutlass
 import cutlass.cute as cute
-from cutlass import Float32, Numeric, const_expr, range_constexpr
+from cutlass import Float32, Numeric, const_expr
 from cutlass.cute import TensorSSA
 
 
@@ -21,7 +22,7 @@ def tanh(x: Numeric | TensorSSA, output_dtype: Numeric | None = None) -> Numeric
         y = cute.make_rmem_tensor(x.shape, Float32)
         y.store(x.to(Float32))
 
-        for i in range_constexpr(cute.size(y.shape)):
+        for i in cutlass.range(cute.size(y.shape), unroll_full=True):
             y[i] = cute.math.tanh(y[i], fastmath=True)
 
         y = y.load()

@@ -11,9 +11,10 @@ import math
 from functools import partial
 
 import cuda.bindings.driver as cuda
+import cutlass
 import cutlass.cute as cute
 import torch
-from cutlass import Float32, const_expr, range_constexpr
+from cutlass import Float32, const_expr
 
 from ....math import get_powers_of_2
 from ....autotuner import AutotuneConfig, autotune
@@ -45,21 +46,26 @@ class _SwiGLUBackwardCUDAKernel(ElementwiseCUDAKernel):
 
 
 class _SwiGLUBackwardPackedCUDAKernel(ElementwisePackedCUDAKernel):
+    NUM_TENSORS = (1, 1, 0, 1)
+
     @cute.jit
     def compute(self, xs_1: list[cute.Tensor], xs_2: list[cute.Tensor]) -> tuple[list[cute.Tensor], list[cute.Tensor]]:
         assert const_expr(len(xs_1) == 1)
         assert const_expr(len(xs_2) == 1)
 
-        dy = xs_1[0]
-        x = xs_2[0]
-        dtype = x.dtype
+        dtype = xs_2[0].dtype
 
-        N = cute.size(x.shape)
+        N = cute.size(xs_2[0].shape)
         H = N >> 1
+
+        dy = cute.make_rmem_tensor(H, dtype)
+        dy.store(xs_1[0])
+        x = cute.make_rmem_tensor(N, dtype)
+        x.store(xs_2[0])
 
         dx = cute.make_rmem_tensor(N, Float32)
 
-        for j in range_constexpr(H):
+        for j in cutlass.range(H, unroll_full=True):
             h = j << 1
 
             g = x[h].to(Float32)
@@ -119,9 +125,9 @@ def _swiglu_packed_backward_cuda(x: torch.Tensor, dy: torch.Tensor, dx: torch.Te
         caller_op=_swiglu_packed_backward_cuda,
         key=(x.dtype, div_x, div_dy, BLOCK_SIZE, M),
         kernel_class=partial(_SwiGLUBackwardPackedCUDAKernel, BLOCK_SIZE=BLOCK_SIZE, M=M),
-        example_tensors_list=([dy], [x], [], [dx]),
-        divisibility_list_list=([div_dy], [div_x], [], [div_x]),
+        example_tensors_list=([dy, x, dx],),
+        divisibility_list_list=([div_dy, div_x, div_x],),
         stream=stream,
     )
 
-    kernel([dy], [x], [], [dx], stream)
+    kernel([dy, x, dx], stream)

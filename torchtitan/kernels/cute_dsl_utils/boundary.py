@@ -6,7 +6,8 @@
 # **************************************************
 
 import cutlass.cute as cute
-from cutlass import Boolean, range_constexpr
+import cutlass
+from cutlass import Boolean
 
 
 @cute.jit
@@ -20,7 +21,7 @@ def lane_boundary(gC: cute.Tensor, tiled_copy: cute.TiledCopy, block_coord, THRE
     is_within_boundary = cute.elem_less(tC[cute.size(tC) - 1], shape)
 
     if not is_within_boundary:
-        for i in range_constexpr(cute.size(rC)):
+        for i in cutlass.range(cute.size(rC), unroll_full=True):
             rC[i] = cute.elem_less(tC[i], shape)
 
     return thr_copy, rC, is_within_boundary

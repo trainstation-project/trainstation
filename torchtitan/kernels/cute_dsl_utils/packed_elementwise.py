@@ -18,6 +18,8 @@ from .elementwise import _load, _store
 
 
 class ElementwisePackedCUDAKernel:
+    NUM_TENSORS: tuple[int, int, int, int]
+
     def __init__(self, BLOCK_SIZE: int, M: int) -> ElementwisePackedCUDAKernel:
         self.BLOCK_SIZE = BLOCK_SIZE
         self.M = M
@@ -95,14 +97,15 @@ class ElementwisePackedCUDAKernel:
             BLOCK_ID += NUM_BLOCKS
 
     @cute.jit
-    def __call__(
-        self,
-        mXs_1: list[cute.Tensor],
-        mXs_2: list[cute.Tensor],
-        mYs_1: list[cute.Tensor],
-        mYs_2: list[cute.Tensor],
-        stream: cuda.CUstream,
-    ) -> None:
+    def __call__(self, mTensors: list[cute.Tensor], stream: cuda.CUstream) -> None:
+        NUM_Xs_1, NUM_Xs_2, NUM_Ys_1, NUM_Ys_2 = self.NUM_TENSORS
+        assert const_expr(len(mTensors) == NUM_Xs_1 + NUM_Xs_2 + NUM_Ys_1 + NUM_Ys_2)
+
+        mXs_1 = mTensors[:NUM_Xs_1]
+        mXs_2 = mTensors[NUM_Xs_1 : NUM_Xs_1 + NUM_Xs_2]
+        mYs_1 = mTensors[NUM_Xs_1 + NUM_Xs_2 : NUM_Xs_1 + NUM_Xs_2 + NUM_Ys_1]
+        mYs_2 = mTensors[NUM_Xs_1 + NUM_Xs_2 + NUM_Ys_1 :]
+
         vector_size = min([128 // i.element_type.width for i in mXs_1 + mXs_2 + mYs_1 + mYs_2])
 
         WARP_SIZE = Accelerator.get_warp_size()
