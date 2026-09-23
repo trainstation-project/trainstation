@@ -5,7 +5,7 @@
 # Copyright (c) 2026, Mayank Mishra
 # **************************************************
 
-from .environment import environment, get_boolean_env_variable
+from .environment import get_boolean_env_variable
 from .packages import (
     is_causal_conv1d_available,
     is_coda_available,
