@@ -147,6 +147,21 @@ class Accelerator(Enum):
         return sm_count
 
     @staticmethod
+    def get_warp_size() -> int:
+        accelerator = Accelerator.get_accelerator()
+
+        if accelerator == Accelerator.cuda:
+            warp_size = 32
+        else:
+            raise ValueError(f"unexpected accelerator ({accelerator})")
+
+        return warp_size
+
+    @staticmethod
+    def get_log_warp_size() -> int:
+        return Accelerator.get_warp_size().bit_length() - 1
+
+    @staticmethod
     def get_profiler_activity() -> ProfilerActivity:
         accelerator = Accelerator.get_accelerator()
 

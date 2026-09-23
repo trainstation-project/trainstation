@@ -12,7 +12,7 @@ import cutlass.cute as cute
 import torch
 from cutlass import Int32, const_expr
 
-from ..constants import LOG_WARP_SIZE, WARP_SIZE
+from ..device import Accelerator
 from .boundary import lane_boundary
 from .elementwise import _load, _store
 
@@ -104,6 +104,9 @@ class ElementwisePackedCUDAKernel:
         stream: cuda.CUstream,
     ) -> None:
         vector_size = min([128 // i.element_type.width for i in mXs_1 + mXs_2 + mYs_1 + mYs_2])
+
+        WARP_SIZE = Accelerator.get_warp_size()
+        LOG_WARP_SIZE = Accelerator.get_log_warp_size()
 
         thr_layout = cute.make_ordered_layout((self.BLOCK_SIZE >> LOG_WARP_SIZE, WARP_SIZE), order=(1, 0))
 

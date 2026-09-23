@@ -14,7 +14,7 @@ import cutlass.cute as cute
 import torch
 from cutlass import Int32
 
-from ..constants import LOG_WARP_SIZE, WARP_SIZE
+from ..device import Accelerator
 from .boundary import lane_boundary
 from .utils import get_fake_cute_tensor
 
@@ -118,6 +118,9 @@ class ElementwiseCUDAKernel:
     @cute.jit
     def __call__(self, mXs: list[cute.Tensor], mYs: list[cute.Tensor], stream: cuda.CUstream) -> None:
         vector_size = min([128 // i.element_type.width for i in mXs + mYs])
+
+        WARP_SIZE = Accelerator.get_warp_size()
+        LOG_WARP_SIZE = Accelerator.get_log_warp_size()
 
         thr_layout = cute.make_ordered_layout((self.BLOCK_SIZE >> LOG_WARP_SIZE, WARP_SIZE), order=(1, 0))
         val_layout = cute.make_ordered_layout((self.M, vector_size), order=(1, 0))
