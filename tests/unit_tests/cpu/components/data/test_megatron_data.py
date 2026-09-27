@@ -10,11 +10,19 @@ ported from lm-engine's ``tests/megatron_data_test.py`` and
 initialized here, so the code takes its single-process (rank 0) paths."""
 
 import os
+import pathlib
 import pickle
+import shutil
+import tempfile
 
 import numpy as np
 import pytest
 import torch
+import torch.distributed as dist
+from torch.testing._internal.distributed._tensor.common_dtensor import (
+    DTensorTestBase,
+    with_comms,
+)
 
 from torchtitan.components.data.megatron import (
     build,
@@ -281,25 +289,33 @@ def test_sampler_resumes_from_consumed_samples() -> None:
 # ------------------------------------------------ MegatronDataLoader
 
 
-def _loader(tmp_path, *, dp_world_size=1, dp_rank=0, **overrides) -> MegatronDataLoader:
+def _loader(
+    tmp_path,
+    *,
+    dp_world_size=1,
+    dp_rank=0,
+    max_context_length=8,
+    num_tokens_per_batch=16,
+    **overrides,
+) -> MegatronDataLoader:
     prefix = str(tmp_path / "numbered")
     if not os.path.exists(get_idx_path(prefix)):
         _write(prefix, _numbered_documents(num_documents=40, length=7))
-    config = MegatronDataLoader.Config(
+    fields = dict(
         data_paths=[prefix],
         sequence_length=8,
         num_samples=24,
         split="100,0,0",
         data_cache_path=str(tmp_path / "cache"),
         num_workers=0,
-        **overrides,
     )
-    return config.build(
+    fields.update(overrides)
+    return MegatronDataLoader.Config(**fields).build(
         dp_world_size=dp_world_size,
         dp_rank=dp_rank,
         tokenizer=None,
-        max_context_length=8,
-        num_tokens_per_batch=16,
+        max_context_length=max_context_length,
+        num_tokens_per_batch=num_tokens_per_batch,
     )
 
 
@@ -377,6 +393,124 @@ def test_loader_config_validation() -> None:
         )
 
 
+def _document_ids(tokens: torch.Tensor) -> set[int]:
+    return set((tokens // _DOC_STRIDE).tolist())
+
+
+def test_loader_weighted_blend_uses_blended_dataset(tmp_path) -> None:
+    other = str(tmp_path / "other")
+    _write(other, _numbered_documents(num_documents=40, length=7))
+    loader = _loader(
+        tmp_path,
+        data_paths=[str(tmp_path / "numbered"), other],
+        data_weights=[0.3, 0.7],
+    )
+    assert isinstance(loader._dataset, BlendedDataset)
+    assert loader._dataset.weights == normalize([0.3, 0.7])
+    assert next(iter(loader))["input"].shape == (16,)
+
+
+def test_loader_valid_split_is_disjoint_from_train(tmp_path) -> None:
+    def all_documents(split_name: str) -> set[int]:
+        loader = _loader(
+            tmp_path,
+            split="50,50,0",
+            split_name=split_name,
+            num_samples=8,
+            repeat=False,
+        )
+        return set().union(*(_document_ids(b["input"]) for b in loader))
+
+    train, valid = all_documents("train"), all_documents("valid")
+    assert train and valid
+    # Splits partition the documents (split by sequence; one sequence per document).
+    assert train.isdisjoint(valid)
+    assert max(train) < min(valid)
+
+
+def test_loader_empty_split_raises(tmp_path) -> None:
+    with pytest.raises(ValueError, match="split no data"):
+        _loader(tmp_path, split="100,0,0", split_name="valid")
+
+
+def test_loader_repeat_wraps_to_first_batch(tmp_path) -> None:
+    loader = _loader(tmp_path)
+    num_batches = len(loader._dataset) // 2
+    iterator = iter(loader)
+    first = next(iterator)
+    for _ in range(num_batches - 1):
+        next(iterator)
+    wrapped = next(iterator)
+
+    torch.testing.assert_close(wrapped["input"], first["input"])
+    assert loader.state_dict()["dp_rank_0"]["consumed_samples"] == 2
+
+
+def test_loader_state_dict_is_per_rank(tmp_path) -> None:
+    loader = _loader(tmp_path, dp_world_size=2, dp_rank=1)
+    next(iter(loader))
+    assert loader.state_dict() == {
+        "version": 1,
+        "dp_world_size": 2,
+        # One global batch is 2 samples on each of 2 ranks.
+        "dp_rank_1": {"consumed_samples": 4},
+    }
+
+
+def test_loader_load_empty_state_is_noop(tmp_path) -> None:
+    loader = _loader(tmp_path)
+    expected = next(iter(_loader(tmp_path)))
+    loader.load_state_dict({})
+    torch.testing.assert_close(next(iter(loader))["input"], expected["input"])
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"version": 2, "dp_world_size": 1, "dp_rank_0": {"consumed_samples": 0}},
+        {"version": 1, "dp_world_size": 4, "dp_rank_0": {"consumed_samples": 0}},
+        {"version": 1, "dp_world_size": 1, "dp_rank_3": {"consumed_samples": 0}},
+    ],
+)
+def test_loader_load_state_dict_rejects_mismatch(tmp_path, state) -> None:
+    loader = _loader(tmp_path)
+    with pytest.raises(ValueError):
+        loader.load_state_dict(state)
+
+
+def test_loader_rejects_sequence_longer_than_context(tmp_path) -> None:
+    with pytest.raises(ValueError, match="exceeds max_context_length"):
+        _loader(tmp_path, sequence_length=16, num_tokens_per_batch=32)
+
+
+def test_loader_rejects_too_few_max_documents(tmp_path) -> None:
+    # 16 tokens / sequence_length 8 = 2 samples (documents) per batch.
+    with pytest.raises(ValueError, match="max_num_documents"):
+        _loader(tmp_path, max_num_documents=1)
+    assert _loader(tmp_path, max_num_documents=2).max_num_documents == 2
+
+
+def test_loader_rejects_fewer_samples_than_one_global_batch(tmp_path) -> None:
+    with pytest.raises(ValueError, match="fewer than one global batch"):
+        # 40 documents * 7 tokens / 8 ~ 34 samples < one global batch of 64.
+        _loader(tmp_path, num_tokens_per_batch=8 * 64, max_context_length=8)
+
+
+def test_loader_close_keeps_position(tmp_path) -> None:
+    loader = _loader(tmp_path)
+    iterator = iter(loader)
+    next(iterator)
+    next(iterator)
+    loader.close()
+
+    # close() drops the iterator but keeps consumed_samples, so iteration
+    # resumes at the third batch.
+    resumed = next(iter(loader))
+    expected = list(_loader(tmp_path, repeat=False))[2]
+    torch.testing.assert_close(resumed["input"], expected["input"])
+
+
+# ------------------------------------------------ FIM
 # ------------------------------------------------ FIM
 
 
@@ -445,3 +579,56 @@ def test_fim_rate_zero_leaves_samples_unchanged(tmp_path) -> None:
     dataset = _build_fim(tmp_path, fim_rate=0.0, fim_spm_rate=0.5)
     sample = dataset[0]["text"]
     assert not {2, 3, 4, 5} & set(sample.tolist())
+
+
+# ------------------------------------------------ multi-rank
+
+
+class TestMegatronDataLoaderDistributed(DTensorTestBase):
+    """Two gloo ranks: global rank 0 builds and caches the indices, then a
+    barrier, then rank 1 loads them (lm-engine's build-then-load order)."""
+
+    @property
+    def world_size(self):
+        return 2
+
+    @property
+    def device_type(self):
+        return "cpu"
+
+    @with_comms
+    def test_ranks_share_cache_and_split_global_batches(self):
+        # Rank 0 picks a directory; everyone uses it.
+        shared = [tempfile.mkdtemp() if self.rank == 0 else None]
+        dist.broadcast_object_list(shared, src=0)
+        tmp_path = pathlib.Path(shared[0])
+        if self.rank == 0:
+            _write(str(tmp_path / "numbered"), _numbered_documents(40, 7))
+        dist.barrier()
+
+        loader = _loader(tmp_path, dp_world_size=2, dp_rank=self.rank)
+        batch = next(iter(loader))
+
+        cache_files = os.listdir(tmp_path / "cache")
+        # One set of index files, written once by rank 0.
+        assert (
+            sum(name.endswith("-GPTDataset-shuffle_index.npy") for name in cache_files)
+            == 1
+        )
+        # The global batch is samples [0, 4): rank r gets [2r, 2r + 2).
+        expected = torch.cat(
+            [
+                torch.from_numpy(loader._dataset[i]["text"][:-1])
+                for i in range(2 * self.rank, 2 * self.rank + 2)
+            ]
+        )
+        torch.testing.assert_close(batch["input"], expected)
+
+        gathered = [None, None]
+        dist.all_gather_object(gathered, batch["input"])
+        assert not torch.equal(gathered[0], gathered[1])
+
+        loader.close()
+        dist.barrier()
+        if self.rank == 0:
+            shutil.rmtree(tmp_path)
