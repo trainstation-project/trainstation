@@ -14,7 +14,10 @@ flex attention from recompiling for every batch shape.
 
 lm-eval splits requests across data-parallel ranks and gathers the metrics.
 Within a data-parallel rank the model may be tensor parallel; its TP ranks
-see the same requests, so they issue identical forward passes.
+see the same requests, so they issue identical forward passes. Under TP the
+output layer returns each rank's slice of the vocabulary, and scores are
+combined across the slices the way the loss-parallel cross-entropy in
+components/loss.py does, without gathering the full vocabulary.
 """
 
 from typing import Any
@@ -23,7 +26,6 @@ import torch
 import torch.distributed as dist
 from lm_eval.api.model import TemplateLM
 from lm_eval.utils import get_rolling_token_windows, make_disjoint_window
-from torch.distributed.tensor import DTensor
 from tqdm import tqdm
 
 from torchtitan.components.loss import IGNORE_INDEX
@@ -85,6 +87,12 @@ class TrainstationLM(TemplateLM):
         self.max_num_documents = max_num_documents
         self._device = device
         self._forward_context = dist_utils.get_spmd_context(parallel_dims=parallel_dims)
+        self._tp_group = (
+            parallel_dims.get_mesh("tp").get_group()
+            if parallel_dims.tp_enabled
+            else None
+        )
+        self._vocab_start: int | None = None
         self._dp_group = None
         if parallel_dims.dp_enabled:
             batch_mesh = parallel_dims.get_mesh("batch")
@@ -253,16 +261,10 @@ class TrainstationLM(TemplateLM):
             for chunk_rows, chunk_ids in zip(
                 rows.split(_LOGITS_CHUNK_ROWS), ids.split(_LOGITS_CHUNK_ROWS)
             ):
-                logits = self.model.lm_head(hidden[chunk_rows])
-                if isinstance(logits, DTensor):
-                    # Under TP the logits may be sharded over the vocabulary.
-                    logits = logits.full_tensor()
-                logits = logits.float()
-                token_logprobs.append(
-                    logits.gather(-1, chunk_ids.unsqueeze(-1)).squeeze(-1)
-                    - logits.logsumexp(dim=-1)
-                )
-                is_greedy.append(logits.argmax(dim=-1) == chunk_ids)
+                logits = self.model.lm_head(hidden[chunk_rows]).float()
+                logprob, greedy = self._score_logits(logits, chunk_ids)
+                token_logprobs.append(logprob)
+                is_greedy.append(greedy)
 
         results = []
         offset = 0
@@ -273,6 +275,58 @@ class TrainstationLM(TemplateLM):
             results.append((sum(token_logprobs[span]), all(is_greedy[span])))
             offset += len(targets)
         return results
+
+    def _score_logits(
+        self, logits: torch.Tensor, ids: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Log-probability of each target id, and whether it is the argmax.
+
+        Without TP, ``logits`` covers the whole vocabulary. Under TP it is this
+        rank's slice [vocab_start, vocab_start + local_size) and the softmax
+        is combined across ranks with all-reduces.
+        """
+        if self._tp_group is None:
+            logprob = logits.gather(-1, ids.unsqueeze(-1)).squeeze(
+                -1
+            ) - logits.logsumexp(dim=-1)
+            return logprob, logits.argmax(dim=-1) == ids
+
+        group = self._tp_group
+        local_size = logits.shape[-1]
+        vocab_start = self._tp_vocab_start(local_size)
+
+        local_max, local_argmax = logits.max(dim=-1)
+        global_max = local_max.clone()
+        dist.all_reduce(global_max, op=dist.ReduceOp.MAX, group=group)
+        sumexp = torch.exp(logits - global_max.unsqueeze(-1)).sum(dim=-1)
+        dist.all_reduce(sumexp, op=dist.ReduceOp.SUM, group=group)
+
+        # Only the rank whose slice holds the target contributes its logit.
+        in_slice = (ids >= vocab_start) & (ids < vocab_start + local_size)
+        local_ids = (ids - vocab_start).clamp(0, local_size - 1)
+        target_logit = torch.where(
+            in_slice, logits.gather(-1, local_ids.unsqueeze(-1)).squeeze(-1), 0.0
+        )
+        dist.all_reduce(target_logit, op=dist.ReduceOp.SUM, group=group)
+        logprob = target_logit - global_max - sumexp.log()
+
+        # The global argmax is the smallest vocabulary index holding the global
+        # max, matching torch.argmax on the full logits.
+        no_max = torch.iinfo(torch.int64).max
+        argmax = torch.where(
+            local_max == global_max, local_argmax + vocab_start, no_max
+        )
+        dist.all_reduce(argmax, op=dist.ReduceOp.MIN, group=group)
+        return logprob, argmax == ids
+
+    def _tp_vocab_start(self, local_size: int) -> int:
+        """First vocabulary index of this rank's lm_head slice (slices may be uneven)."""
+        if self._vocab_start is None:
+            group = self._tp_group
+            sizes = [0] * dist.get_world_size(group)
+            dist.all_gather_object(sizes, local_size, group=group)
+            self._vocab_start = sum(sizes[: dist.get_rank(group)])
+        return self._vocab_start
 
     # Distributed primitives used by lm_eval.evaluator.evaluate(), over the
     # data-parallel group (lm-eval's ranks).
