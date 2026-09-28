@@ -35,11 +35,12 @@ its `dump_folder` and builds the same model):
 TRAIN_ARGS="--module llama3 --config llama3_8b --dump_folder ./outputs/run7"
 
 # Watch mode: evaluate each checkpoint as it lands; exits once the final
-# training step (training.steps) has been evaluated.
+# training step (training.steps) has been evaluated, or after
+# --max-idle-hours (default 24) without a new checkpoint.
 torchrun --nproc_per_node=8 -m torchtitan.experiments.evals.evaluate \
     --tasks trainstation_quick --watch -- $TRAIN_ARGS
 
-# Backfill: every completed checkpoint that has no results for the suite yet.
+# Backfill: every completed checkpoint, on the tasks it has no results for.
 torchrun --nproc_per_node=8 -m torchtitan.experiments.evals.evaluate \
     --tasks trainstation_full -- $TRAIN_ARGS
 
@@ -48,9 +49,16 @@ torchrun --nproc_per_node=8 -m torchtitan.experiments.evals.evaluate \
     --tasks trainstation_full --steps 20000 40000 -- $TRAIN_ARGS
 ```
 
-Results go to `<dump_folder>/evals/step-N/<suite>.json` (lm-eval's `results`,
-plus step, dtype and lm-eval version). A step with results is skipped on
-later runs, so re-running is cheap and a crashed job can simply be restarted.
+Results go to `<dump_folder>/evals/step-N/<task>.json`, one file per task
+(lm-eval's `results`, plus step, dtype and lm-eval version). Suites are
+expanded into their tasks, while groups with an aggregate score, such as
+MMLU, keep one file. A task with results is skipped on later runs, so
+re-running is cheap, a crashed job can simply be restarted, a task added to a
+suite is backfilled on old steps, and a task in two suites runs once per step.
+
+The step-0 checkpoint written by `checkpoint.create_seed_checkpoint` is
+evaluated too. It is the model training starts from, so its scores are each
+task's baseline.
 
 ### Models that do not fit on one GPU
 
@@ -68,16 +76,21 @@ those axes communicate across ranks in the forward pass.
 ### W&B
 
 `--wandb` logs every result as `eval/<task>/<metric>` to a W&B run named
-`<run name>-eval-<suite>` in the training run's group. It reads the same
-environment variables as the training job's W&B logger (`WANDB_TEAM`,
-`WANDB_PROJECT`, `WANDB_RUN_NAME`, `WANDB_RUN_GROUP`). Metrics are plotted
+`<run name>-eval-<suite>`. It reads the same environment variables as the
+training job's W&B logger (`WANDB_TEAM`, `WANDB_PROJECT`, `WANDB_RUN_NAME`,
+`WANDB_RUN_GROUP`). To group the eval run with the training run, set the same
+`WANDB_RUN_GROUP` for both jobs. Metrics are plotted
 against `train_step`, so backfilled or out-of-order results land in the right
 place, and a restarted eval job resumes the same run.
 
 ### Other options
 
 `--limit` (examples per task, for smoke tests), `--dtype`,
-`--num-tokens-per-batch`, `--poll-interval`, `--output-folder`; see `--help`.
+`--num-tokens-per-batch`, `--poll-interval`, `--max-idle-hours`,
+`--output-folder`; see `--help`.
+
+Models with multi-token-prediction layers (the DeepSeek `_mtp` configs) are
+evaluated on their main output layer; the MTP layers are not built.
 
 Make sure `checkpoint.keep_latest_k` does not delete checkpoints before they
 are evaluated; `checkpoint.purge_exempt` can keep selected steps.

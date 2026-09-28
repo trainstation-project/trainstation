@@ -9,7 +9,7 @@
 Runs as its own job next to (never inside) the training job. It reads the
 training config with the same CLI as ``torchtitan.train``, loads each
 ``step-N`` checkpoint natively (no HF conversion), and writes lm-eval results
-to ``<dump_folder>/evals/step-N/<suite>.json``.
+to ``<dump_folder>/evals/step-N/<task>.json``, one file per task.
 
 Usage::
 
@@ -17,9 +17,10 @@ Usage::
         --tasks trainstation_quick [--steps 1000 2000 | --watch] \\
         -- --module llama3 --config llama3_8b [training overrides]
 
-Without ``--steps``, every completed checkpoint that has no results for the
-suite yet is evaluated. ``--watch`` keeps polling for new checkpoints until
-the final training step has been evaluated.
+Without ``--steps``, every completed checkpoint is evaluated on the tasks it
+has no results for yet. ``--watch`` keeps polling for new checkpoints until
+the final training step has been evaluated, or until no new checkpoint has
+appeared for ``--max-idle-hours``.
 """
 
 import dataclasses
@@ -79,6 +80,10 @@ class EvalConfig:
     poll_interval: int = 300
     """Seconds between checks for new checkpoints in watch mode."""
 
+    max_idle_hours: float = 24.0
+    """In watch mode, stop after this long without a new checkpoint to
+    evaluate, e.g. when the training run died before its final step."""
+
     limit: float | None = None
     """Examples per task (a fraction if < 1). For quick checks only."""
 
@@ -132,26 +137,84 @@ def suite_name(tasks: list[str]) -> str:
     return "+".join(tasks)
 
 
-def results_path(output_folder: str, step: int, tasks: list[str]) -> str:
-    return os.path.join(output_folder, f"step-{step}", f"{suite_name(tasks)}.json")
+def expand_tasks(names: list[str], task_manager: TaskManager) -> list[str]:
+    """The units results are stored under: tasks, plus groups that aggregate.
+
+    Suite groups such as trainstation_full only list other tasks, so they are
+    expanded into their members; each member then gets its own results file,
+    and a task shared by two suites is evaluated once per step. Groups with
+    aggregate metrics (e.g. MMLU) stay whole, because the aggregate needs all
+    their subtasks in one evaluation.
+    """
+    units: list[str] = []
+    for name in names:
+        entry = task_manager.task_index.get(name)
+        cfg = entry.cfg if entry is not None and isinstance(entry.cfg, dict) else {}
+        members = cfg.get("task")
+        is_suite = (
+            entry is not None
+            and entry.kind.name == "GROUP"
+            and not cfg.get("aggregate_metric_list")
+            and isinstance(members, list)
+            # Members with per-task overrides (e.g. num_fewshot) only apply
+            # inside the group, so such groups stay whole.
+            and all(isinstance(member, str) for member in members)
+        )
+        units.extend(expand_tasks(members, task_manager) if is_suite else [name])
+    return list(dict.fromkeys(units))
 
 
-def pending_steps(args: EvalConfig, ckpt_folder: str, output_folder: str) -> list[int]:
-    if args.steps:
-        return args.steps
-    # Rank 0 lists and broadcasts, so a checkpoint that appears mid-listing
-    # cannot give ranks different work lists.
+def results_path(output_folder: str, step: int, task: str) -> str:
+    return os.path.join(output_folder, f"step-{step}", f"{task}.json")
+
+
+def missing_tasks(output_folder: str, step: int, tasks: list[str]) -> list[str]:
+    return [
+        task
+        for task in tasks
+        if not os.path.exists(results_path(output_folder, step, task))
+    ]
+
+
+def pending_work(
+    args: EvalConfig, tasks: list[str], ckpt_folder: str, output_folder: str
+) -> list[tuple[int, list[str]]]:
+    """(step, tasks without results) for each checkpoint that has work left."""
+    # Rank 0 lists and broadcasts, so a checkpoint or results file that appears
+    # mid-listing cannot give ranks different work lists.
     return broadcast_from_rank0(
         lambda: [
-            step
-            for step in list_checkpoint_steps(ckpt_folder)
-            if not os.path.exists(results_path(output_folder, step, args.tasks))
+            (step, missing)
+            for step in (args.steps or list_checkpoint_steps(ckpt_folder))
+            if (missing := missing_tasks(output_folder, step, tasks))
         ]
     )
 
 
+def write_on_rank0(path: str, record: dict[str, Any]) -> None:
+    """Write ``record`` on rank 0; every rank raises if the write fails.
+
+    Other ranks would otherwise block on the next collective while rank 0
+    exits, and the job would hang instead of failing.
+    """
+    error = None
+    if dist.get_rank() == 0:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            # Write then rename so pending_work() never sees a partial file.
+            with open(f"{path}.tmp", "w") as f:
+                json.dump(record, f, indent=2, default=str)
+            os.replace(f"{path}.tmp", path)
+        except OSError as e:
+            error = f"{type(e).__name__}: {e}"
+    error = broadcast_from_rank0(lambda: error)
+    if error is not None:
+        raise RuntimeError(f"Rank 0 failed to write {path}: {error}")
+
+
 def evaluate_step(
     step: int,
+    tasks: list[str],
     *,
     args: EvalConfig,
     config: Trainer.Config,
@@ -159,47 +222,50 @@ def evaluate_step(
     task_manager: TaskManager,
     ckpt_folder: str,
     output_folder: str,
-) -> dict[str, Any] | None:
-    """Evaluate one checkpoint; returns the results record on global rank 0."""
+) -> dict[str, Any]:
+    """Evaluate one checkpoint on ``tasks``, writing one results file per task.
+
+    Returns the lm-eval results of all tasks, keyed by task and subtask.
+    """
     checkpoint = os.path.join(ckpt_folder, f"step-{step}")
-    logger.info(f"Evaluating {checkpoint} on {args.tasks}")
-    start = time.perf_counter()
+    logger.info(f"Evaluating {checkpoint} on {tasks}")
     load_weights(lm.model, checkpoint)
 
-    results = simple_evaluate(
-        model=lm,
-        tasks=args.tasks,
-        limit=args.limit,
-        task_manager=task_manager,
-        log_samples=False,
-    )
-    # Every TP rank of data-parallel rank 0 gets results; one writes them.
-    if dist.get_rank() != 0:
-        return None
-    assert results is not None
-    record = {
-        "step": step,
-        "checkpoint": checkpoint,
-        "module": config.model_spec.name,
-        "flavor": config.model_spec.flavor,
-        "dtype": args.dtype,
-        "tensor_parallel_degree": args.tensor_parallel_degree,
-        "limit": args.limit,
-        "lm_eval_version": lm_eval.__version__,
-        "eval_seconds": time.perf_counter() - start,
-        "results": results["results"],
-        "groups": results.get("groups", {}),
-        "n-shot": results.get("n-shot", {}),
-        "versions": results.get("versions", {}),
-    }
-    path = results_path(output_folder, step, args.tasks)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    # Write then rename so pending_steps() never sees a partial file.
-    with open(f"{path}.tmp", "w") as f:
-        json.dump(record, f, indent=2, default=str)
-    os.replace(f"{path}.tmp", path)
-    logger.info(f"Wrote {path} ({record['eval_seconds']:.0f}s)")
-    return record
+    all_results: dict[str, Any] = {}
+    for task in tasks:
+        start = time.perf_counter()
+        results = simple_evaluate(
+            model=lm,
+            tasks=[task],
+            limit=args.limit,
+            task_manager=task_manager,
+            log_samples=False,
+        )
+        record = None
+        # Every TP rank of data-parallel rank 0 gets results; rank 0 writes.
+        if dist.get_rank() == 0:
+            assert results is not None
+            record = {
+                "step": step,
+                "task": task,
+                "checkpoint": checkpoint,
+                "module": config.model_spec.name,
+                "flavor": config.model_spec.flavor,
+                "dtype": args.dtype,
+                "tensor_parallel_degree": args.tensor_parallel_degree,
+                "limit": args.limit,
+                "lm_eval_version": lm_eval.__version__,
+                "eval_seconds": time.perf_counter() - start,
+                "results": results["results"],
+                "groups": results.get("groups", {}),
+                "n-shot": results.get("n-shot", {}),
+                "versions": results.get("versions", {}),
+            }
+            all_results.update(results["results"])
+        path = results_path(output_folder, step, task)
+        write_on_rank0(path, record or {})
+        logger.info(f"Wrote {path}")
+    return all_results
 
 
 def main() -> None:
@@ -236,6 +302,8 @@ def main() -> None:
         device=device,
     )
     task_manager = TaskManager(include_path=TASKS_DIR)
+    tasks = expand_tasks(args.tasks, task_manager)
+    logger.info(f"Results are stored per task: {tasks}")
     wandb_logger = None
     if args.wandb and dist.get_rank() == 0:
         wandb_logger = EvalWandBLogger(
@@ -245,11 +313,13 @@ def main() -> None:
         )
 
     try:
+        last_work = time.monotonic()
         while True:
-            steps = pending_steps(args, ckpt_folder, output_folder)
-            for step in steps:
-                record = evaluate_step(
+            work = pending_work(args, tasks, ckpt_folder, output_folder)
+            for step, step_tasks in work:
+                results = evaluate_step(
                     step,
+                    step_tasks,
                     args=args,
                     config=config,
                     lm=lm,
@@ -257,16 +327,28 @@ def main() -> None:
                     ckpt_folder=ckpt_folder,
                     output_folder=output_folder,
                 )
-                if wandb_logger is not None and record is not None:
-                    wandb_logger.log(step, record)
-            final_done = broadcast_from_rank0(
-                lambda: os.path.exists(
-                    results_path(output_folder, config.training.steps, args.tasks)
-                )
-            )
-            if not args.watch or final_done:
+                if wandb_logger is not None:
+                    wandb_logger.log(step, {"results": results})
+            if work:
+                last_work = time.monotonic()
+            if not args.watch:
                 break
-            if not steps:
+            final_done = broadcast_from_rank0(
+                lambda: not missing_tasks(output_folder, config.training.steps, tasks)
+            )
+            if final_done:
+                break
+            # Decided on rank 0 so all ranks stop together.
+            idle = broadcast_from_rank0(
+                lambda: time.monotonic() - last_work > args.max_idle_hours * 3600
+            )
+            if idle:
+                logger.warning(
+                    f"No new checkpoint for {args.max_idle_hours} hours and step "
+                    f"{config.training.steps} has no results; stopping."
+                )
+                break
+            if not work:
                 time.sleep(args.poll_interval)
     finally:
         if wandb_logger is not None:

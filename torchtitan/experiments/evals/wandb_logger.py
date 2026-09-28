@@ -8,8 +8,10 @@
 
 Uses the same environment variables as the training job's W&B logger
 (``WANDB_TEAM``, ``WANDB_PROJECT``, ``WANDB_RUN_NAME``, ``WANDB_RUN_GROUP``).
-Results go to a separate run in the training run's group rather than into the
-training run itself, so the two jobs never write to one run concurrently.
+Results go to a separate run, so the two jobs never write to one run
+concurrently. To group it with the training run, set the same
+``WANDB_RUN_GROUP`` for both jobs; without it the training run has no group
+and the eval run's group is the run name.
 """
 
 import hashlib
