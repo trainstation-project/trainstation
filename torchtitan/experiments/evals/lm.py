@@ -33,6 +33,11 @@ from torchtitan.distributed import ParallelDims, utils as dist_utils
 from torchtitan.protocols.model import BaseModel
 
 
+# Target rows per lm_head call: bounds the fp32 logits to
+# _LOGITS_CHUNK_ROWS x vocab (about 2.5 GB for a 150k vocabulary).
+_LOGITS_CHUNK_ROWS = 4096
+
+
 class TrainstationLM(TemplateLM):
     """Log-likelihood scoring of lm-eval requests with a torchtitan model.
 
@@ -70,6 +75,8 @@ class TrainstationLM(TemplateLM):
                 f"max_context_length ({max_context_length})."
             )
         self.model = model
+        # Forward returns final hidden states; see _score_buffer.
+        self.model._skip_lm_head = True
         self.tokenizer = tokenizer
         self.parallel_dims = parallel_dims
         self.parallelism = parallelism
@@ -226,6 +233,8 @@ class TrainstationLM(TemplateLM):
             "padding_mask": padding_mask,
         }
         batch = {k: v.to(self._device, non_blocking=True) for k, v in batch.items()}
+        rows = torch.tensor(target_rows, device=self._device)
+        ids = torch.tensor(target_ids, device=self._device)
         with self._forward_context():
             inputs, _, extra_kwargs = self.model.preprocess_inputs(
                 batch,
@@ -234,20 +243,31 @@ class TrainstationLM(TemplateLM):
                 max_num_documents=self.max_num_documents,
                 max_context_length=self.max_context_length,
             )
-            logits = self.model(inputs, **extra_kwargs)
-        if isinstance(logits, DTensor):
-            # Under TP the logits may be sharded over the vocabulary.
-            logits = logits.full_tensor()
-
-        rows = torch.tensor(target_rows, device=self._device)
-        ids = torch.tensor(target_ids, device=self._device)
-        logprobs = torch.log_softmax(logits[rows].float(), dim=-1)
-        token_logprobs = logprobs.gather(-1, ids.unsqueeze(-1)).squeeze(-1)
-        is_greedy = logprobs.argmax(dim=-1) == ids
+            # Like ChunkedLossWrapper: take the final hidden states, which are
+            # replicated over TP, and apply lm_head to the target rows only,
+            # a chunk of rows at a time. Full logits for a buffer (tokens x
+            # vocab) do not fit for long contexts and large vocabularies, and
+            # rolling-window requests make every row a target.
+            hidden = self.model(inputs, **extra_kwargs)
+            token_logprobs, is_greedy = [], []
+            for chunk_rows, chunk_ids in zip(
+                rows.split(_LOGITS_CHUNK_ROWS), ids.split(_LOGITS_CHUNK_ROWS)
+            ):
+                logits = self.model.lm_head(hidden[chunk_rows])
+                if isinstance(logits, DTensor):
+                    # Under TP the logits may be sharded over the vocabulary.
+                    logits = logits.full_tensor()
+                logits = logits.float()
+                token_logprobs.append(
+                    logits.gather(-1, chunk_ids.unsqueeze(-1)).squeeze(-1)
+                    - logits.logsumexp(dim=-1)
+                )
+                is_greedy.append(logits.argmax(dim=-1) == chunk_ids)
 
         results = []
         offset = 0
-        token_logprobs, is_greedy = token_logprobs.tolist(), is_greedy.tolist()
+        token_logprobs = torch.cat(token_logprobs).tolist()
+        is_greedy = torch.cat(is_greedy).tolist()
         for _, targets in sequences:
             span = slice(offset, offset + len(targets))
             results.append((sum(token_logprobs[span]), all(is_greedy[span])))

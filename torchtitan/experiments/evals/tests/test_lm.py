@@ -22,6 +22,7 @@ from torchtitan.components.checkpointer import ModelWrapper
 from torchtitan.components.tokenizer import HuggingFaceTokenizer
 from torchtitan.config import ConfigManager, ParallelismConfig
 from torchtitan.distributed import ParallelDims
+from torchtitan.experiments.evals import lm as lm_module
 from torchtitan.experiments.evals.checkpoint import (
     build_model,
     cast_parameters,
@@ -105,7 +106,11 @@ def _reference_logprob(model, context: list[int], continuation: list[int]):
         parallel_dims=PARALLEL_DIMS,
         parallelism=ParallelismConfig(),
     )
-    logits = model(inputs, **extra_kwargs)
+    skip_lm_head, model._skip_lm_head = model._skip_lm_head, False
+    try:
+        logits = model(inputs, **extra_kwargs)
+    finally:
+        model._skip_lm_head = skip_lm_head
     logprobs = torch.log_softmax(logits[-len(continuation) :].float(), dim=-1)
     targets = torch.tensor(continuation)
     total = logprobs.gather(-1, targets.unsqueeze(-1)).sum().item()
@@ -225,3 +230,18 @@ def test_load_weights_round_trips_dcp(model, tmp_path):
         torch.testing.assert_close(
             value.full_tensor().cpu(), expected[key], rtol=0, atol=0
         )
+
+
+def test_chunked_lm_head_matches_single_chunk(model, tokenizer, monkeypatch):
+    requests = [
+        Instance("loglikelihood_rolling", {}, (doc,), idx)
+        for idx, doc in enumerate(DOCUMENTS)
+    ]
+    single = _make_lm(model, tokenizer).loglikelihood_rolling(
+        requests, disable_tqdm=True
+    )
+    monkeypatch.setattr(lm_module, "_LOGITS_CHUNK_ROWS", 7)
+    chunked = _make_lm(model, tokenizer).loglikelihood_rolling(
+        requests, disable_tqdm=True
+    )
+    assert chunked == pytest.approx(single, abs=1e-4)
