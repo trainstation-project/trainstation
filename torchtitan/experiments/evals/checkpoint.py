@@ -7,6 +7,7 @@
 """Build the eval model from a training config and load DCP weights into it."""
 
 import dataclasses
+import logging
 import os
 import re
 
@@ -20,6 +21,8 @@ from torchtitan.distributed import ParallelDims, utils as dist_utils
 from torchtitan.protocols.model import BaseModel
 from torchtitan.tools import utils
 from torchtitan.trainer import Trainer
+
+logger = logging.getLogger(__name__)
 
 _STEP_DIR = re.compile(r"^step-(\d+)$")
 
@@ -85,8 +88,21 @@ def build_model(
     ``config.parallelism`` must already be the eval layout (see
     ``eval_parallelism``). Parameters are held in ``dtype``, and the FSDP
     mixed-precision policy computes in it too.
+
+    Multi-token-prediction (MTP) layers are left out: they only serve the
+    training loss, and the main output layer is what lm-eval scores. Their
+    weights in the checkpoint are not loaded.
     """
     model_config = config.model_spec.model
+    # DeepSeek V3 and V4 keep MTP layers in ``mtp_layers`` (V4 also counts
+    # them in ``n_mtp_layers``); without them both run as plain decoders.
+    if getattr(model_config, "mtp_layers", None):
+        logger.info(
+            f"Evaluating without the {len(model_config.mtp_layers)} MTP layers."
+        )
+        model_config.mtp_layers = []
+        if hasattr(model_config, "n_mtp_layers"):
+            model_config.n_mtp_layers = 0
     # Mirror Trainer.__init__: update_from_config, then overrides.
     model_config.update_from_config(config=config)
     if config.override.imports:
