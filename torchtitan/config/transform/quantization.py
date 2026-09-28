@@ -387,12 +387,14 @@ class MXFP8GroupedExpertsConverter(QuantizationConverter):
 
     @dataclass(kw_only=True, slots=True)
     class Config(QuantizationConverter.Config):
-        recipe_name: Literal["mxfp8_rceil"] = "mxfp8_rceil"
+        recipe_name: Literal["mxfp8_rceil", "mxfp8_rceil_wgrad_with_hp"] = "mxfp8_rceil"
         """
-        Quantization recipe name for grouped GEMMs. Options: ["mxfp8_rceil"]
+        Quantization recipe name for grouped GEMMs.
 
         - mxfp8_rceil: MXFP8 dynamic quantization with RCEIL rounding mode
           when computing the e8m0 scale factors.
+        - mxfp8_rceil_wgrad_with_hp: The same MXFP8 forward and input-gradient
+          quantization, with high-precision weight-gradient GEMMs.
         """
         pad_multiple: int = 32
         """
