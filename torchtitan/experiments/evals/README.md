@@ -87,13 +87,49 @@ place, and a restarted eval job resumes the same run.
 
 `--limit` (examples per task, for smoke tests), `--dtype`,
 `--num-tokens-per-batch`, `--poll-interval`, `--max-idle-hours`,
-`--output-folder`; see `--help`.
+`--output-folder`, `--decontaminate` (see [Contamination](#contamination));
+see `--help`.
+
+Rank 0 downloads the eval datasets once at startup; after that every rank
+reads them from the local cache. Loading a task makes about ten Hugging Face
+Hub requests even when it is cached, and the Hub allows 1000 requests per 5
+minutes, so every rank loading every task at each step would be throttled.
 
 Models with multi-token-prediction layers (the DeepSeek `_mtp` configs) are
 evaluated on their main output layer; the MTP layers are not built.
 
 Make sure `checkpoint.keep_latest_k` does not delete checkpoints before they
 are evaluated; `checkpoint.purge_exempt` can keep selected steps.
+
+## Contamination
+
+Benchmark questions that also appear in the training data raise scores
+through memorization. `contamination.py` checks for this with the 13-gram
+overlap test used for GPT-3: an eval question counts as contaminated when any
+13 consecutive words of it (lowercased, punctuation removed) also occur in a
+training document.
+
+It reads the training data through the run's own dataloader and decodes it
+back to text, so it checks exactly what the run trains on, whatever the data
+source. By default it scans the run's whole token budget
+(`training.steps` x `training.num_tokens_per_train_step`). It needs no GPUs,
+and each process scans its own share of the data:
+
+```bash
+torchrun --nproc_per_node=32 -m torchtitan.experiments.evals.contamination \
+    --tasks trainstation_full [--max-tokens 1000000000] -- $TRAIN_ARGS
+```
+
+The report, `<dump_folder>/evals/contamination.json`, lists for each task
+how many questions overlap the training data, and which. Questions shorter
+than 13 words cannot be checked and count as clean.
+
+With `--decontaminate`, the eval job also scores each task on its clean
+questions only, written as `step-N/<task>.clean.json` and logged to W&B under
+`eval_clean/`. A gap between the full and clean scores shows how much a task
+is inflated by contamination. For reading-comprehension tasks such as BoolQ,
+an overlap is usually the passage (often from Wikipedia) rather than the
+question and answer.
 
 ## Suites
 

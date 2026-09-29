@@ -33,6 +33,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
+import datasets
+import huggingface_hub.constants
 import lm_eval
 import torch
 import torch.distributed as dist
@@ -60,6 +62,10 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 TASKS_DIR = os.path.join(os.path.dirname(__file__), "tasks")
+
+# Results unit suffix for scores on the questions that do not overlap the
+# training data (see --decontaminate).
+CLEAN_SUFFIX = ".clean"
 
 
 @dataclass(kw_only=True, slots=True)
@@ -103,9 +109,22 @@ class EvalConfig:
     output_folder: str | None = None
     """Where to write results. Default: <dump_folder>/evals."""
 
+    decontaminate: bool = False
+    """Also score each task on only the questions that do not overlap the
+    training data, per the report from contamination.py. Written as
+    <task>.clean.json and logged to W&B under eval_clean/."""
+
+    contamination_report: str | None = None
+    """Report used by --decontaminate. Default: <output_folder>/contamination.json."""
+
     def __post_init__(self) -> None:
         if self.watch and self.steps:
             raise ValueError("watch and steps are mutually exclusive.")
+        if self.decontaminate and self.limit is not None:
+            raise ValueError(
+                "decontaminate selects the clean questions itself; it cannot be "
+                "combined with limit."
+            )
 
 
 def parse_args(argv: list[str]) -> tuple[EvalConfig, list[str]]:
@@ -191,6 +210,51 @@ def pending_work(
     )
 
 
+def cache_datasets_then_go_offline(tasks: list[str], task_manager: TaskManager) -> None:
+    """Download the eval datasets on rank 0, then read only the local cache.
+
+    Loading a task makes about ten Hugging Face Hub requests even when its data
+    is cached. Every rank doing that for every task at every step exceeds the
+    Hub's rate limit (1000 requests per 5 minutes) on a single 8-GPU node.
+    """
+    if dist.get_rank() == 0:
+        task_manager.load(tasks)
+    dist.barrier()
+    # datasets and huggingface_hub read these at call time; the environment
+    # variables of the same names are only read at import.
+    huggingface_hub.constants.HF_HUB_OFFLINE = True
+    datasets.config.HF_HUB_OFFLINE = True
+
+
+def load_contamination_report(path: str, tasks: list[str]) -> dict[str, Any]:
+    """Load a contamination.py report and check it covers ``tasks``."""
+    if not os.path.exists(path):
+        raise ValueError(
+            f"No contamination report at {path}. Run "
+            "torchtitan.experiments.evals.contamination with the same --tasks "
+            "and training arguments first."
+        )
+    with open(path) as f:
+        report = json.load(f)
+    missing = [task for task in tasks if task not in report["units"]]
+    if missing:
+        raise ValueError(
+            f"The contamination report {path} does not cover {missing}; rerun "
+            "contamination.py with these tasks."
+        )
+    return report
+
+
+def clean_samples(report: dict[str, Any], unit: str) -> dict[str, list[int]]:
+    """Per lm-eval task in ``unit``, the ids of questions with no overlap."""
+    samples = {}
+    for name in report["units"][unit]:
+        entry = report["tasks"][name]
+        contaminated = set(entry["contaminated"])
+        samples[name] = [i for i in range(entry["num_docs"]) if i not in contaminated]
+    return samples
+
+
 def write_on_rank0(path: str, record: dict[str, Any]) -> None:
     """Write ``record`` on rank 0; every rank raises if the write fails.
 
@@ -222,32 +286,56 @@ def evaluate_step(
     task_manager: TaskManager,
     ckpt_folder: str,
     output_folder: str,
-) -> dict[str, Any]:
+    contamination: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Evaluate one checkpoint on ``tasks``, writing one results file per task.
 
-    Returns the lm-eval results of all tasks, keyed by task and subtask.
+    Tasks ending in CLEAN_SUFFIX are scored on the questions ``contamination``
+    marks clean. Returns the lm-eval results of the full and of the clean
+    evaluations, keyed by task and subtask.
     """
     checkpoint = os.path.join(ckpt_folder, f"step-{step}")
     logger.info(f"Evaluating {checkpoint} on {tasks}")
     load_weights(lm.model, checkpoint)
 
     all_results: dict[str, Any] = {}
+    clean_results: dict[str, Any] = {}
     for task in tasks:
         start = time.perf_counter()
-        results = simple_evaluate(
-            model=lm,
-            tasks=[task],
-            limit=args.limit,
-            task_manager=task_manager,
-            log_samples=False,
-        )
+        clean = task.endswith(CLEAN_SUFFIX)
+        base = task.removesuffix(CLEAN_SUFFIX)
+        samples = None
+        excluded = None
+        if clean:
+            assert contamination is not None
+            samples = clean_samples(contamination, base)
+            excluded = {
+                name: contamination["tasks"][name]["num_docs"] - len(ids)
+                for name, ids in samples.items()
+            }
+        if samples is not None and not all(samples.values()):
+            # lm-eval evaluates every question of a task with no sample ids,
+            # so a task whose questions all overlap has to be skipped.
+            logger.warning(f"Skipping {task}: every question of a subtask overlaps.")
+            results = {"results": {}}
+        else:
+            results = simple_evaluate(
+                model=lm,
+                tasks=[base],
+                limit=args.limit,
+                samples=samples,
+                task_manager=task_manager,
+                log_samples=False,
+            )
         record = None
         # Every TP rank of data-parallel rank 0 gets results; rank 0 writes.
         if dist.get_rank() == 0:
             assert results is not None
             record = {
                 "step": step,
-                "task": task,
+                "task": base,
+                "decontaminated": clean,
+                "excluded_questions": excluded,
                 "checkpoint": checkpoint,
                 "module": config.model_spec.name,
                 "flavor": config.model_spec.flavor,
@@ -261,11 +349,11 @@ def evaluate_step(
                 "n-shot": results.get("n-shot", {}),
                 "versions": results.get("versions", {}),
             }
-            all_results.update(results["results"])
+            (clean_results if clean else all_results).update(results["results"])
         path = results_path(output_folder, step, task)
         write_on_rank0(path, record or {})
         logger.info(f"Wrote {path}")
-    return all_results
+    return all_results, clean_results
 
 
 def main() -> None:
@@ -304,6 +392,15 @@ def main() -> None:
     task_manager = TaskManager(include_path=TASKS_DIR)
     tasks = expand_tasks(args.tasks, task_manager)
     logger.info(f"Results are stored per task: {tasks}")
+    cache_datasets_then_go_offline(tasks, task_manager)
+    contamination = None
+    if args.decontaminate:
+        contamination = load_contamination_report(
+            args.contamination_report
+            or os.path.join(output_folder, "contamination.json"),
+            tasks,
+        )
+        tasks = tasks + [task + CLEAN_SUFFIX for task in tasks]
     wandb_logger = None
     if args.wandb and dist.get_rank() == 0:
         wandb_logger = EvalWandBLogger(
@@ -317,7 +414,7 @@ def main() -> None:
         while True:
             work = pending_work(args, tasks, ckpt_folder, output_folder)
             for step, step_tasks in work:
-                results = evaluate_step(
+                results, clean_results = evaluate_step(
                     step,
                     step_tasks,
                     args=args,
@@ -326,9 +423,12 @@ def main() -> None:
                     task_manager=task_manager,
                     ckpt_folder=ckpt_folder,
                     output_folder=output_folder,
+                    contamination=contamination,
                 )
                 if wandb_logger is not None:
-                    wandb_logger.log(step, {"results": results})
+                    wandb_logger.log(
+                        step, {"results": results}, {"results": clean_results}
+                    )
             if work:
                 last_work = time.monotonic()
             if not args.watch:

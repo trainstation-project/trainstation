@@ -20,8 +20,8 @@ import os
 from typing import Any
 
 
-def flatten_results(record: dict[str, Any]) -> dict[str, float]:
-    """``{"eval/<task>/<metric>": value}`` for every numeric lm-eval metric.
+def flatten_results(record: dict[str, Any], prefix: str = "eval") -> dict[str, float]:
+    """``{"<prefix>/<task>/<metric>": value}`` for every numeric lm-eval metric.
 
     lm-eval keys metrics as ``"<metric>,<filter>"``; the filter is dropped when
     it is ``none``. Standard errors are kept as ``<metric>_stderr``.
@@ -35,7 +35,7 @@ def flatten_results(record: dict[str, Any]) -> dict[str, float]:
                 continue
             metric, filter_name = key.split(",", 1)
             name = metric if filter_name == "none" else f"{metric}_{filter_name}"
-            metrics[f"eval/{task}/{name}"] = value
+            metrics[f"{prefix}/{task}/{name}"] = value
     return metrics
 
 
@@ -70,9 +70,20 @@ class EvalWandBLogger:
         )
         self.run.define_metric("train_step")
         self.run.define_metric("eval/*", step_metric="train_step")
+        self.run.define_metric("eval_clean/*", step_metric="train_step")
 
-    def log(self, step: int, record: dict[str, Any]) -> None:
-        self.run.log({"train_step": step, **flatten_results(record)})
+    def log(
+        self,
+        step: int,
+        record: dict[str, Any],
+        clean_record: dict[str, Any] | None = None,
+    ) -> None:
+        """Log ``record`` under eval/ and, if given, clean-subset results under
+        eval_clean/."""
+        metrics = flatten_results(record)
+        if clean_record:
+            metrics.update(flatten_results(clean_record, prefix="eval_clean"))
+        self.run.log({"train_step": step, **metrics})
 
     def close(self) -> None:
         self.run.finish()
