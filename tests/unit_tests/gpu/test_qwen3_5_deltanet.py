@@ -7,6 +7,10 @@
 import unittest
 from unittest import mock
 
+import pytest
+
+pytest.importorskip("attn_gym")
+
 import torch
 import torch.nn.functional as F
 from attn_gym.linear import l2norm, recurrent_gdn

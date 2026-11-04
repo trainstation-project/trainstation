@@ -4,6 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import importlib.util
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -28,11 +29,15 @@ from torchtitan.models.kimi_k2_7.vision_encoder import (
     _compute_learned_pos_embeds as _compute_kimi_learned_pos_embeds,
     _tpool_patch_merger,
 )
-from torchtitan.models.qwen3_5.vision_encoder import (
-    _compute_2d_rope_cache,
-    _compute_learned_pos_embeds,
-    PatchMerger,
-)
+
+_HAS_ATTN_GYM = importlib.util.find_spec("attn_gym") is not None
+if _HAS_ATTN_GYM:
+    # The qwen3_5 package imports its GDN layer, which requires attn_gym.
+    from torchtitan.models.qwen3_5.vision_encoder import (
+        _compute_2d_rope_cache,
+        _compute_learned_pos_embeds,
+        PatchMerger,
+    )
 
 
 class TestPackedVision(unittest.TestCase):
@@ -163,6 +168,7 @@ class TestPackedVision(unittest.TestCase):
         )
         torch.testing.assert_close(dense_mask, expected)
 
+    @unittest.skipUnless(_HAS_ATTN_GYM, "qwen3_5 requires attn_gym")
     def test_qwen_position_embeddings_are_packed(self) -> None:
         grids = [[1, 2, 2], [2, 2, 2]]
         learned_pos = _compute_learned_pos_embeds(
@@ -182,6 +188,7 @@ class TestPackedVision(unittest.TestCase):
         self.assertEqual(learned_pos.shape, (12, 4))
         self.assertEqual(rope_cache.shape, (12, 1, 16))
 
+    @unittest.skipUnless(_HAS_ATTN_GYM, "qwen3_5 requires attn_gym")
     def test_qwen_patch_merger_keeps_packed_order(self) -> None:
         merger = PatchMerger(
             PatchMerger.Config(

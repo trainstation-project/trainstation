@@ -6,8 +6,11 @@
 
 """Unit tests for the KDA linear-attention layer."""
 
-import importlib.util
 import unittest
+
+import pytest
+
+pytest.importorskip("attn_gym")
 
 import torch
 
@@ -15,11 +18,10 @@ from torchtitan.models.common import Conv1d, Linear
 from torchtitan.models.common.attention import create_varlen_metadata_for_document
 from torchtitan.models.kimi_k3.kda import InnerKDA, KDA, KDAKernel, KimiRMSNormGated
 
-_HAS_BLACKWELL = (
-    importlib.util.find_spec("attn_gym") is not None
-    and torch.cuda.is_available()
-    and torch.cuda.get_device_capability() in {(10, 0), (10, 3)}
-)
+_HAS_BLACKWELL = torch.cuda.is_available() and torch.cuda.get_device_capability() in {
+    (10, 0),
+    (10, 3),
+}
 
 
 def _kda_config() -> KDA.Config:

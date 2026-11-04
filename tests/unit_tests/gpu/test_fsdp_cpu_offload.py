@@ -83,6 +83,7 @@ def _offload_policy(module: nn.Module) -> object | None:
     return group.offload_policy
 
 
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason="requires 2 CUDA GPUs")
 class TestVisionEncoderCPUOffload(DTensorTestBase):
     @property
     def world_size(self) -> int:

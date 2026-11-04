@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import dataclasses
+import importlib.util
 import math
 import unittest
 from unittest.mock import patch
@@ -24,7 +25,6 @@ from torchtitan.models.common.rope import (
     CosSinRoPE,
     RoPE,
 )
-from torchtitan.models.qwen3_5.rope import MRoPE
 
 
 class TestApplyRotaryEmbCosSin(unittest.TestCase):
@@ -174,6 +174,13 @@ class TestRoPEPositionBoundsCosSin(unittest.TestCase):
             self.rope(xq, xk, positions)
 
 
+_HAS_ATTN_GYM = importlib.util.find_spec("attn_gym") is not None
+if _HAS_ATTN_GYM:
+    # The qwen3_5 package imports its GDN layer, which requires attn_gym.
+    from torchtitan.models.qwen3_5.rope import MRoPE
+
+
+@unittest.skipUnless(_HAS_ATTN_GYM, "qwen3_5 requires attn_gym")
 class TestMRoPECache(unittest.TestCase):
     def test_rejects_invalid_sections(self):
         for sections, error in (
