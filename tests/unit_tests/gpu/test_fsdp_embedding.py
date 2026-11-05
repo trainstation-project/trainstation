@@ -30,6 +30,7 @@ from torchtitan.protocols.sharding import ShardingConfig
 pytestmark = pytest.mark.multi_gpu
 
 
+@pytest.mark.skipif(torch.cuda.device_count() < 4, reason="requires 4 CUDA GPUs")
 class TestFSDPEmbedding(DTensorTestBase):
     @property
     def world_size(self) -> int:

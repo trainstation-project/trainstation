@@ -8,6 +8,10 @@ import copy
 import unittest
 from typing import cast
 
+import pytest
+
+pytest.importorskip("triton")
+
 import torch
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.nn.attention.flex_attention import create_block_mask

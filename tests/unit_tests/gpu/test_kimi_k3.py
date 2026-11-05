@@ -6,6 +6,10 @@
 
 import unittest
 
+import pytest
+
+pytest.importorskip("attn_gym")
+
 import torch
 from torch.nn.attention.flex_attention import BlockMask
 

@@ -171,6 +171,10 @@ class TestHelionRoPEOverride(unittest.TestCase):
         self.assertIs(type(root.rope), _ContractSubclassRoPE.Config)
         self.assertEqual(root.rope.extra, 7)
 
+    @unittest.skipIf(
+        helion_rope_module._HELION_IMPORT_ERROR is not None,
+        "helion is not importable",
+    )
     def test_cpu_falls_back_to_cossin(self):
         """On CPU the module falls back to CosSinRoPE, bit-for-bit identical."""
         torch.manual_seed(0)
@@ -190,6 +194,10 @@ class TestHelionRoPEOverride(unittest.TestCase):
         torch.testing.assert_close(out_q, ref_q, rtol=0, atol=0)
         torch.testing.assert_close(out_k, ref_k, rtol=0, atol=0)
 
+    @unittest.skipIf(
+        helion_rope_module._HELION_IMPORT_ERROR is not None,
+        "helion is not importable",
+    )
     def test_cpu_falls_back_to_complex(self):
         """On CPU the module falls back to ComplexRoPE, bit-for-bit identical."""
         torch.manual_seed(0)

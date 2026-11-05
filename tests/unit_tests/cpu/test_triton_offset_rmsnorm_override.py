@@ -6,6 +6,10 @@
 
 import unittest
 
+import pytest
+
+pytest.importorskip("attn_gym")
+
 import spmd_types as spmd
 import torch
 

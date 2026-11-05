@@ -247,7 +247,14 @@ class TestShippedCpRecipes(unittest.TestCase):
                 "torchtitan.config.transform.quantization.has_cuda_capability",
                 return_value=True,
             ):
-                config = fn()
+                try:
+                    config = fn()
+                except ModuleNotFoundError as e:
+                    # qwen3_5-based recipes import its GDN layer, which
+                    # requires the optional attn_gym package.
+                    if e.name != "attn_gym":
+                        raise
+                    continue
             if config.parallelism.context_parallel_degree == 1:
                 continue
             with self.subTest(recipe=name):
