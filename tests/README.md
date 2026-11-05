@@ -7,16 +7,12 @@ This directory contains tests for the torchtitan project, including unit tests a
 - `unit_tests/cpu/`: Unit tests that run without a GPU
 - `unit_tests/gpu/`: Tests that require GPUs; multi-GPU tests use the
   `multi_gpu` pytest marker
-- `integration_tests/`: Contains integration tests that test multiple components together
-  - `features.py`: Tests for torchtitan features and composability
-  - `flux.py`: Tests for the FLUX model
-  - `h100.py`: Tests cases for H100 GPUs
-  - `b200.py`: Test cases that require SM100 or SM103 GPUs
-  - `models.py`: Tests for model architectures
+- `integration_tests/`: Shared integration-test harness (`run_tests.py`,
+  `OverrideDefinitions`). The repo currently ships no in-tree models, so there
+  are no core suites; experiments register their own (e.g.
+  `transformers_modeling_backend`).
 - `assets/`: Contains test assets and fixtures used by the tests
-  - `losses/`: Golden loss and gradient norm curves for the numerics guards
   - `tokenizer/`: Tokenizer configuration and vocabulary files for testing
-  - `custom_schedule.csv`: Custom PP schedule for testing
 
 ## TorchTitan CI Design
 

@@ -3,7 +3,6 @@
 #
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
-import inspect
 
 import pytest
 import spmd_types as spmd
@@ -12,13 +11,6 @@ import torch.distributed.checkpoint as dcp
 import torchtitan.config.transform.quantization as quantization_transform
 from spmd_types import SpmdType
 
-from torchtitan.components.data import (
-    FirstFitPackingConfig,
-    GrainDataLoader,
-    SingleDatasetConfig,
-)
-from torchtitan.components.data.sources import HuggingFaceRandomAccessSource
-from torchtitan.config import ConfigManager
 from torchtitan.config.transform import (
     Float8LinearConverter,
     MXFP8LinearConverter,
@@ -31,24 +23,8 @@ from torchtitan.models.common.decoder_sharding import colwise_config, rowwise_co
 from torchtitan.models.common.feed_forward import FeedForward
 from torchtitan.models.common.linear import Linear
 from torchtitan.models.common.moe import GroupedExperts
-from torchtitan.models.gpt_oss.moe import GptOssGroupedExperts
 from torchtitan.quantization import Float8Linear, MXFP8Linear, NVFP4Linear
 from torchtitan.quantization.float8 import _get_float8_grouped_experts_cls
-from torchtitan.quantization.mxfp8.experts import _get_mxfp8_grouped_experts_cls
-from torchtitan.quantization.utils import has_quantization
-
-
-def test_no_float8_by_default():
-    config_manager = ConfigManager()
-    config = config_manager.parse_args(
-        ["--module", "llama3", "--config", "llama3_debugmodel"]
-    )
-    model_config = config.model_spec.model
-    assert not has_quantization(model_config)
-    # All Linear.Config instances should remain Linear.Config
-    if Float8Linear is not None:
-        for _fqn, lc, _parent, _attr in model_config.traverse(Linear.Config):
-            assert not isinstance(lc, Float8Linear.Config)
 
 
 def _router_config_for_quantization(dim: int):
@@ -91,71 +67,6 @@ def test_nvfp4_converter_rejects_router_gate(monkeypatch):
         converter.convert(_router_config_for_quantization(128))
 
 
-def test_float8_applied_by_model_registry():
-    pytest.importorskip("torchao")
-    config_manager = ConfigManager()
-    config = config_manager.parse_args(
-        ["--module", "llama3", "--config", "llama3_debugmodel_float8_emulate_lora"]
-    )
-    model_config = config.model_spec.model
-    assert has_quantization(model_config)
-    # Some Linear.Config instances should be swapped to Float8Linear
-    converted = [
-        fqn
-        for fqn, lc, _parent, _attr in model_config.traverse(Linear.Config)
-        if isinstance(lc, Float8Linear.Config)
-    ]
-    assert len(converted) > 0
-    lora_converted = {
-        fqn
-        for fqn, lc, _parent, _attr in model_config.traverse(Linear.Config)
-        if hasattr(lc, "rank") and hasattr(lc, "alpha")
-    }
-    assert lora_converted == {
-        f"layers.{layer}.attention.{projection}"
-        for layer in range(6)
-        for projection in ("qkv_linear.wqkv", "wo")
-    }
-
-
-@pytest.mark.parametrize(
-    "module, recipe, expected_num_layers",
-    [
-        ("llama3", "llama3_debugmodel_nvfp4", 6),
-        ("qwen3", "qwen3_debugmodel_nvfp4", 8),
-    ],
-)
-def test_nvfp4_converter_targets_layers_not_lm_head(
-    monkeypatch, module, recipe, expected_num_layers
-):
-    pytest.importorskip("torchao")
-    from torchtitan.quantization import NVFP4Linear
-
-    if NVFP4Linear is None:
-        pytest.skip("torchao NVFP4 training prototype not available")
-    # Exercise convert() targeting independent of GPU: bypass the sm100 gate
-    # that NVFP4LinearConverter.__init__ enforces (hardware is irrelevant to the
-    # config-tree transform under test).
-    monkeypatch.setattr(quantization_transform, "has_cuda_capability", lambda *_: True)
-
-    config_manager = ConfigManager()
-    config = config_manager.parse_args(["--module", module, "--config", recipe])
-    model_config = config.model_spec.model
-    assert has_quantization(model_config)
-
-    converted, stock = [], []
-    for fqn, lc, _parent, _attr in model_config.traverse(Linear.Config):
-        (converted if isinstance(lc, NVFP4Linear.Config) else stock).append(fqn)
-
-    # Every in-layer linear is swapped; the lm_head stays stock (NVFP4 requires
-    # each GEMM dim divisible by 128, which the vocab projection violates).
-    assert converted and all("layers" in fqn for fqn in converted)
-    assert {int(fqn.split(".")[1]) for fqn in converted} == set(
-        range(expected_num_layers)
-    )
-    assert stock == ["lm_head"]
-
-
 def test_nvfp4_bf16_tail_fqns():
     from torchtitan.quantization.nvfp4 import nvfp4_bf16_tail_fqns
 
@@ -176,50 +87,6 @@ def test_nvfp4_bf16_tail_fqns():
     # (an empty fqns list would instead convert *all* Linears).
     with pytest.raises(ValueError, match="nothing to convert"):
         nvfp4_bf16_tail_fqns(4, 1.0)
-
-
-@pytest.mark.parametrize(
-    "module, recipe, expected_cutoff",
-    [
-        ("llama3", "llama3_debugmodel_first_85_pct_layers_nvfp4", 5),
-        ("llama3", "llama3_8b_first_85_pct_layers_nvfp4", 27),
-        ("qwen3", "qwen3_debugmodel_first_85_pct_layers_nvfp4", 6),
-        ("qwen3", "qwen3_8b_first_85_pct_layers_nvfp4", 30),
-    ],
-)
-def test_nvfp4_first_85_pct_layers_converts_only_leading_layers(
-    monkeypatch, module, recipe, expected_cutoff
-):
-    pytest.importorskip("torchao")
-    from torchtitan.quantization import NVFP4Linear
-
-    if NVFP4Linear is None:
-        pytest.skip("torchao NVFP4 training prototype not available")
-    import math
-
-    monkeypatch.setattr(quantization_transform, "has_cuda_capability", lambda *_: True)
-
-    config = ConfigManager().parse_args(["--module", module, "--config", recipe])
-    model_config = config.model_spec.model
-    n_layers = len(model_config.layers)
-    cutoff = n_layers - math.ceil(n_layers * 0.15)
-    assert cutoff == expected_cutoff
-    assert 0 < cutoff < n_layers  # a real split: some NVFP4, some bf16
-
-    converted_layers, stock = set(), []
-    for fqn, lc, _parent, _attr in model_config.traverse(Linear.Config):
-        if isinstance(lc, NVFP4Linear.Config):
-            converted_layers.add(int(fqn.split(".")[1]))
-        else:
-            stock.append(fqn)
-
-    # Only the leading layers are NVFP4; the bf16 tail + lm_head stay stock.
-    assert converted_layers == set(range(cutoff))
-    assert "lm_head" in stock
-    assert all(
-        not fqn.startswith("layers.") or int(fqn.split(".")[1]) >= cutoff
-        for fqn in stock
-    )
 
 
 def _nvfp4_linear_cls():
@@ -278,51 +145,6 @@ def test_nvfp4_build_configures_local_spmd_sharding(sharding_config_factory, inp
     )
 
 
-@pytest.mark.parametrize(
-    "module, recipe",
-    [
-        ("llama3", "llama3_debugmodel_nvfp4"),
-        ("llama3", "llama3_debugmodel_first_85_pct_layers_nvfp4"),
-        ("llama3", "llama3_8b_first_85_pct_layers_nvfp4"),
-        ("qwen3", "qwen3_debugmodel_nvfp4"),
-        ("qwen3", "qwen3_debugmodel_first_85_pct_layers_nvfp4"),
-        ("qwen3", "qwen3_8b_first_85_pct_layers_nvfp4"),
-    ],
-)
-def test_nvfp4_recipes_parse(monkeypatch, module, recipe):
-    _nvfp4_linear_cls()
-    monkeypatch.setattr(quantization_transform, "has_cuda_capability", lambda *_: True)
-    base_args = ["--module", module, "--config", recipe]
-
-    ConfigManager().parse_args(base_args)
-
-
-@pytest.mark.parametrize(
-    "recipe",
-    [
-        "qwen3_debugmodel_nvfp4",
-        "qwen3_debugmodel_first_85_pct_layers_nvfp4",
-        "qwen3_8b_first_85_pct_layers_nvfp4",
-    ],
-)
-def test_qwen3_recipes_resolve(monkeypatch, recipe):
-    _nvfp4_linear_cls()
-    monkeypatch.setattr(quantization_transform, "has_cuda_capability", lambda *_: True)
-    config = ConfigManager().parse_args(["--module", "qwen3", "--config", recipe])
-    assert config.model_spec.name == "qwen3"
-    if recipe == "qwen3_8b_first_85_pct_layers_nvfp4":
-        assert isinstance(config.dataloader, GrainDataLoader.Config)
-        packed_dataset = config.dataloader.dataset
-        assert isinstance(packed_dataset, FirstFitPackingConfig)
-        dataset = packed_dataset.dataset
-        assert isinstance(dataset, SingleDatasetConfig)
-        assert isinstance(dataset.source, HuggingFaceRandomAccessSource.Config)
-        assert dataset.source.path == "openai/gsm8k"
-        assert config.checkpoint.initial_load_in_hf
-        assert config.compile.enable
-        assert "model" in config.compile.components
-
-
 def test_nvfp4_module_buffers_and_native_checkpoint():
     """Built module has the stock weight param plus the two NVFP4 runtime
     buffers, and both buffers are non-persistent -- the RHT vector is a fixed
@@ -359,92 +181,6 @@ def test_nvfp4_stock_checkpoint_loads_before_init_states():
     nvfp4.init_states()
     assert nvfp4._rht_sign_vector is not None
     assert nvfp4._rht_sign_vector_tuple is not None
-
-
-def test_nvfp4_hf_export_strips_buffers(monkeypatch):
-    """The HF export boundary contains only stock keys -- no NVFP4 runtime buffers."""
-    NVFP4Linear = _nvfp4_linear_cls()
-    monkeypatch.setattr(quantization_transform, "has_cuda_capability", lambda *_: True)
-    from torchtitan.models.llama3.state_dict_adapter import Llama3StateDictAdapter
-
-    config = ConfigManager().parse_args(
-        ["--module", "llama3", "--config", "llama3_debugmodel_nvfp4"]
-    )
-    model_config = config.model_spec.model
-    model = model_config.build()
-    model.init_states()
-    assert isinstance(model.get_submodule("layers.0.feed_forward.w13"), NVFP4Linear)
-
-    sd = model.state_dict()
-    # Both NVFP4 runtime buffers are non-persistent, so neither the RHT vector
-    # nor the per-rank SR seed appears in the native state dict.
-    assert not any("_rht_sign_vector" in k for k in sd)
-    assert not any("_sr_seed" in k for k in sd)
-
-    hf_sd = Llama3StateDictAdapter(model_config, hf_assets_path=None).to_hf(sd)
-    assert "model.layers.0.mlp.gate_proj.weight" in hf_sd
-    assert not any("_rht_sign_vector" in k for k in hf_sd)
-
-
-def test_quantized_grouped_experts():
-    """Quantized GroupedExperts: _owner, subclass handling, extra config fields."""
-    # Base case
-    MXFP8GroupedExperts = _get_mxfp8_grouped_experts_cls(GroupedExperts)
-    Float8GroupedExperts = _get_float8_grouped_experts_cls(GroupedExperts)
-
-    assert MXFP8GroupedExperts.Config._owner is MXFP8GroupedExperts
-    assert Float8GroupedExperts.Config._owner is Float8GroupedExperts
-
-    # Subclass case (GptOssGroupedExperts has extra swiglu_limit field)
-    mxfp8_cls = _get_mxfp8_grouped_experts_cls(GptOssGroupedExperts)
-    float8_cls = _get_float8_grouped_experts_cls(GptOssGroupedExperts)
-
-    assert mxfp8_cls.Config._owner is mxfp8_cls
-    assert float8_cls.Config._owner is float8_cls
-    assert issubclass(mxfp8_cls, GptOssGroupedExperts)
-    assert issubclass(float8_cls, GptOssGroupedExperts)
-    assert hasattr(mxfp8_cls.Config, "swiglu_limit")
-    assert hasattr(float8_cls.Config, "swiglu_limit")
-
-
-@pytest.mark.parametrize("parent_cls", [GroupedExperts, GptOssGroupedExperts])
-@pytest.mark.parametrize(
-    "make_quantized_cls",
-    [_get_mxfp8_grouped_experts_cls, _get_float8_grouped_experts_cls],
-    ids=["mxfp8", "float8"],
-)
-def test_grouped_mm_overrides_keep_the_seam_signature(make_quantized_cls, parent_cls):
-    """Every ``_grouped_mm`` override must accept the base class's keywords.
-
-    ``MoE.forward`` calls the seam by keyword, so an override whose parameter
-    names drift raises TypeError at the first expert GEMM rather than at import
-    time -- and only in a MoE training run, which no other unit test reaches.
-    That is how the ``B_t`` -> ``weight_EOI`` rename left the MXFP8 override
-    behind while the float8 one was updated.
-    """
-    base = inspect.signature(parent_cls._grouped_mm)
-    override = inspect.signature(make_quantized_cls(parent_cls)._grouped_mm)
-
-    assert list(override.parameters) == list(base.parameters)
-    for name, parameter in base.parameters.items():
-        assert override.parameters[name].kind == parameter.kind
-
-
-@pytest.mark.parametrize("parent_cls", [GroupedExperts, GptOssGroupedExperts])
-def test_float8_grouped_experts_checkpoint_state_uses_plain_tensors(parent_cls):
-    pytest.importorskip("torchao")
-    stock = parent_cls.Config(dim=16, hidden_dim=32, num_experts=2).build()
-    float8_cls = _get_float8_grouped_experts_cls(parent_cls)
-    module = float8_cls.Config(dim=16, hidden_dim=32, num_experts=2).build()
-
-    assert all(type(param) is torch.nn.Parameter for param in module.parameters())
-    stock_state = stock.state_dict()
-    float8_state = module.state_dict()
-    assert float8_state.keys() == stock_state.keys()
-    for key, value in float8_state.items():
-        assert type(value) is torch.Tensor
-        assert value.shape == stock_state[key].shape
-        assert value.dtype == stock_state[key].dtype
 
 
 @pytest.mark.filterwarnings("ignore:torch.distributed is disabled")
@@ -608,68 +344,6 @@ def test_mxfp8_converter_rejects_empty_saved_input_fqn():
             model_compile_enabled=True,
             linears_saving_inputs_for_backward_in_mxfp8=[""],
         )
-
-
-@pytest.mark.parametrize(
-    "config_factory, mxfp8_fqns",
-    [
-        (
-            "llama3",
-            ("attention.qkv_linear.wqkv", "feed_forward.w2"),
-        ),
-        (
-            "llama3_graph",
-            ("attention.qkv_linear.wqkv", "feed_forward.w2"),
-        ),
-        (
-            "deepseek_v3",
-            ("attention.wkv_b", "feed_forward.w2", "shared_experts.w2"),
-        ),
-        (
-            "deepseek_v3_graph",
-            ("attention.wkv_b", "feed_forward.w2", "shared_experts.w2"),
-        ),
-    ],
-)
-def test_builtin_mxfp8_configs_assign_input_activation_format_for_backward(
-    monkeypatch, config_factory, mxfp8_fqns
-):
-    if MXFP8Linear is None:
-        pytest.skip("torchao MXFP8Linear is unavailable")
-    monkeypatch.setattr(quantization_transform, "has_cuda_capability", lambda *_: True)
-    if config_factory == "llama3":
-        from torchtitan.models.llama3.config_registry import (
-            llama3_debugmodel_mxfp8 as build_config,
-        )
-    elif config_factory == "llama3_graph":
-        from torchtitan.experiments.graph_trainer.llama3.config_registry import (
-            graph_trainer_llama3_debugmodel_mxfp8 as build_config,
-        )
-    elif config_factory == "deepseek_v3":
-        from torchtitan.models.deepseek_v3.config_registry import (
-            deepseek_v3_debugmodel_mxfp8 as build_config,
-        )
-    else:
-        from torchtitan.experiments.graph_trainer.deepseek_v3.config_registry import (
-            graph_trainer_deepseek_v3_debugmodel_mxfp8 as build_config,
-        )
-
-    trainer_config = build_config()
-    assert trainer_config.model_spec is not None
-    model_config = trainer_config.model_spec.model
-    assignments = {
-        fqn: config.input_activation_format_for_backward
-        for fqn, config, _parent, _attr in model_config.traverse(MXFP8Linear.Config)
-    }
-
-    assert assignments
-    assert "bf16" in assignments.values()
-    assert "mxfp8" in assignments.values()
-    for fqn, save_format in assignments.items():
-        expected = (
-            "mxfp8" if any(selector in fqn for selector in mxfp8_fqns) else "bf16"
-        )
-        assert save_format == expected, f"Unexpected policy for {fqn}"
 
 
 def test_mxfp8_linear_loads_stock_checkpoint():

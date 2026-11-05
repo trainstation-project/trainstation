@@ -18,7 +18,7 @@ This demonstrates:
 
 Command to run:
 python3 -m torchtitan.experiments.rl.train \
-    --module alphabet_sort --config rl_grpo_qwen3_0_6b_varlen \
+    --module <rl_module> --config <rl_config_function> \
     --hf_assets_path=<path_to_model_checkpoint>
 """
 

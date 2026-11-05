@@ -36,7 +36,6 @@ from torch.testing._internal.distributed._tensor.common_dtensor import (
 
 from torchtitan.distributed.parallel_dims import ParallelDims
 from torchtitan.models.common.attention import QKVLinear
-from torchtitan.models.common.decoder_sharding import set_gqa_attention_sharding
 from torchtitan.models.common.dist_gemm import (
     AsyncColumnParallelLinear,
     AsyncRowParallelLinear,
@@ -50,84 +49,6 @@ N_HEADS = 8
 
 class TestDistGemmAttentionConfig(unittest.TestCase):
     """Config-graph rewriting. No devices involved."""
-
-    def test_tp_gemm_backend_selects_the_fused_configs(self):
-        """model_registry(tp_gemm_backend="dist_gemm") swaps all three pieces."""
-        from torchtitan.models.llama3 import model_registry
-
-        spec = model_registry("debugmodel", tp_gemm_backend="dist_gemm")
-        for layer in spec.model.layers:
-            attn = layer.attention
-            self.assertIs(type(attn.qkv_linear), QKVLinear.Config)
-            self.assertIsInstance(
-                attn.qkv_linear.wqkv, AsyncColumnParallelLinear.Config
-            )
-            self.assertIsInstance(attn.wo, AsyncRowParallelLinear.Config)
-
-    def test_default_tp_gemm_backend_is_untouched(self):
-        """The default must stay stock, or every model silently changes."""
-        from torchtitan.models.llama3 import model_registry
-
-        for layer in model_registry("debugmodel").model.layers:
-            self.assertNotIsInstance(layer.attention.wo, AsyncRowParallelLinear.Config)
-
-    def test_stock_parameter_shapes_survive(self):
-        """Fused modules keep the stock layouts, or checkpoints stop loading."""
-        from torchtitan.models.llama3 import model_registry
-
-        stock = model_registry("debugmodel").model.layers[0].attention
-        fused = (
-            model_registry("debugmodel", tp_gemm_backend="dist_gemm")
-            .model.layers[0]
-            .attention
-        )
-        self.assertEqual(
-            fused.qkv_linear.wqkv.in_features, stock.qkv_linear.wqkv.in_features
-        )
-        self.assertEqual(
-            fused.qkv_linear.wqkv.out_features, stock.qkv_linear.wqkv.out_features
-        )
-        self.assertEqual(fused.wo.in_features, stock.wo.in_features)
-        self.assertEqual(fused.wo.out_features, stock.wo.out_features)
-
-    def test_sequence_parallel_disabled_is_rejected(self):
-        """The fused GEMMs *are* the SP collectives, so SP off has nothing to fuse
-        and wo would reduce-scatter where it must all-reduce."""
-        from torchtitan.models.llama3 import model_registry
-
-        attn = model_registry("debugmodel", tp_gemm_backend="dist_gemm")
-        attn = attn.model.layers[0].attention
-        with self.assertRaisesRegex(ValueError, "enable_sequence_parallel"):
-            set_gqa_attention_sharding(attn, enable_sp=False)
-
-    def test_sharding_setup_declares_the_fused_contracts(self):
-        """set_gqa_attention_sharding declares different contracts for dist-GEMM.
-
-        Two differences from the stock block, both because the fused ops own the
-        collectives themselves: the block declares no attention-boundary
-        all-gather, and wo emits its final Shard(1) rather than a Partial for the
-        framework to reduce-scatter. Declaring the stock Partial here would make
-        the module fail its own out_src check at runtime.
-        """
-        from torchtitan.models.llama3 import model_registry
-
-        stock = model_registry("debugmodel").model.layers[0].attention
-        fused = (
-            model_registry("debugmodel", tp_gemm_backend="dist_gemm")
-            .model.layers[0]
-            .attention
-        )
-        set_gqa_attention_sharding(stock, enable_sp=True)
-        set_gqa_attention_sharding(fused, enable_sp=True)
-
-        self.assertIsNotNone(stock.sharding_config)
-        self.assertIsNone(fused.sharding_config)
-
-        self.assertIsNotNone(stock.wo.sharding_config.out_src_shardings)
-        self.assertIsNone(fused.wo.sharding_config.out_src_shardings)
-        self.assertIsNone(fused.wo.sharding_config.out_dst_shardings)
-        # the weight sharding still has to be declared, or wo is never sharded
-        self.assertIn("weight", fused.wo.sharding_config.state_shardings)
 
 
 class TestDistGemmAttentionSharding(DTensorTestBase):
@@ -157,32 +78,6 @@ class TestDistGemmAttentionSharding(DTensorTestBase):
         ):
             parallel_dims.build_mesh()
         return parallel_dims
-
-    @with_comms
-    def test_parallelize_preserves_the_fused_contracts(self):
-        """Nothing downstream of the declaration undoes it.
-
-        The config-level assertions live in
-        ``test_sharding_setup_declares_the_fused_contracts``; this pins that they
-        survive ``parallelize``, which is where an earlier revision had to patch
-        them back because the sharding setup ran last and overwrote them.
-        """
-        from torchtitan.models.llama3.config_registry import llama3_debugmodel_dist_gemm
-
-        parallel_dims = self._parallel_dims()
-        attn_cfg = (
-            llama3_debugmodel_dist_gemm(seq_len=2048)
-            .model_spec.model.layers[0]
-            .attention
-        )
-        set_gqa_attention_sharding(attn_cfg, enable_sp=True)
-        attn = attn_cfg.build().to(self.device_type)
-        attn.parallelize(parallel_dims)
-
-        self.assertIsNone(attn._sharding_config)
-        self.assertIsNone(attn.wo._sharding_config.out_src_shardings)
-        self.assertIsNone(attn.wo._sharding_config.out_dst_shardings)
-        self.assertIn("weight", attn.wo._sharding_config.state_shardings)
 
 
 @unittest.skipUnless(

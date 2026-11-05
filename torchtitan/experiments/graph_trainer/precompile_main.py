@@ -14,8 +14,8 @@ GPUs just for precompilation.
 
 Usage (aot_fx_trace mode):
     python -m torchtitan.experiments.graph_trainer.precompile_main \
-        --module graph_trainer.llama3 \
-        --config graph_trainer_llama3_debugmodel \
+        --module <module> \
+        --config <config_function> \
         --compile.mode aot_fx_trace \
         --compile.precompile_artifact_dir /tmp/fx_trace_artifacts
 """
@@ -122,7 +122,7 @@ def _common_setup(config):
     if model_spec is None:
         raise ValueError(
             "model_spec must be set. Pass --module to specify the model "
-            "(e.g. --module graph_trainer.llama3)."
+            "(e.g. --module <module>)."
         )
 
     # TODO: Factor the model setup below with the training path so precompile

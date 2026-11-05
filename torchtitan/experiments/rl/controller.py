@@ -268,7 +268,7 @@ class Controller(Configurable):
 
     Example:
 
-        config = config_registry.rl_grpo_qwen3_0_6b_varlen()
+        config = config_registry.<rl_config_function>()
         controller = config.build()
         trainer_mesh = ...        # provisioned by the caller (see train.py)
         generator_meshes = ...

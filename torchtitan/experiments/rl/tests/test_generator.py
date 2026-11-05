@@ -16,23 +16,12 @@ The uneven-decode integration test requires four GPUs and a torchrun launcher.
 """
 
 import asyncio
-import gc
-import math
-import os
-import shutil
-import tempfile
 from types import SimpleNamespace
 
 import pytest
-import torch
-import torch.distributed as dist
-from vllm import SamplingParams
 from vllm.sampling_params import RequestOutputKind
 
-from torchtitan.components.checkpointer import CheckpointManager
-from torchtitan.config import CommConfig, DebugConfig
-from torchtitan.distributed import utils as dist_utils
-from torchtitan.distributed.activation_checkpoint import FullAC
+from torchtitan.config import DebugConfig
 from torchtitan.experiments.rl.actors.generator import (
     _extract_request_metrics_inputs,
     _prepare_generation_request_metrics,
@@ -42,10 +31,7 @@ from torchtitan.experiments.rl.actors.generator import (
     VLLMCudagraphConfig,
     VLLMGenerator,
 )
-from torchtitan.experiments.rl.models.vllm_registry import (
-    InferenceParallelismConfig,
-    register_to_vllm,
-)
+from torchtitan.experiments.rl.models.vllm_registry import InferenceParallelismConfig
 from torchtitan.experiments.rl.models.vllm_worker import TorchTitanGPUModelRunner
 from torchtitan.experiments.rl.observability import metrics as m
 from torchtitan.experiments.rl.routing.intra_generator_router import (
@@ -294,47 +280,6 @@ def test_reset_running_requests_requires_prefix_cache_reset():
         )
 
 
-def test_trainer_requires_prefix_cache_reset_when_hotswap_off():
-    # Strict drain (hot_swap=False) needs the prefix cache reset so post-pull requests don't reuse old-weight KV.
-    import dataclasses
-
-    from torchtitan.experiments.rl.examples.alphabet_sort.config_registry import (
-        rl_grpo_qwen3_0_6b_varlen,
-    )
-
-    config = rl_grpo_qwen3_0_6b_varlen()
-    # hot_swap defaults True; the guard fires only in drain mode (hot_swap=False) with reset also off.
-    with pytest.raises(ValueError, match="reset_prefix_cache_on_weight_sync"):
-        dataclasses.replace(
-            config,
-            generator_router=dataclasses.replace(
-                config.generator_router, hot_swap=False
-            ),
-            generator=dataclasses.replace(
-                config.generator, reset_prefix_cache_on_weight_sync=False
-            ),
-        )
-
-
-def test_qwen36_27b_config_applies_offset_rmsnorm_to_both_actors():
-    from torchtitan.experiments.rl.examples.alphabet_sort.config_registry import (
-        rl_grpo_qwen3_6_27b_varlen_perf,
-    )
-
-    config = rl_grpo_qwen3_6_27b_varlen_perf()
-    override_import = "torchtitan.overrides.offset_rmsnorm.triton_offset_rmsnorm"
-
-    assert config.hf_assets_path.endswith("Qwen3.6-27B")
-    assert config.trainer.override.imports == [override_import]
-    assert config.generator.override.imports == [override_import]
-    assert config.trainer.parallelism.data_parallel_shard_degree == 2
-    assert config.trainer.parallelism.tensor_parallel_degree == 2
-    assert config.generator.parallelism.tensor_parallel_degree == 4
-    assert config.trainer.optimizer.implementation == "fused_opt_states_bf16"
-    assert isinstance(config.trainer.ac_config, FullAC.Config)
-    assert config.generator.cudagraph.enable
-
-
 # --- CUDA graph config (VLLMCudagraphConfig.get_vllm_compilation_config) ---
 
 
@@ -509,82 +454,3 @@ def test_inference_parallelism_disables_dense_sequence_parallelism():
     parallelism = InferenceParallelismConfig(tensor_parallel_degree=4)
 
     assert not parallelism.to_training().enable_sequence_parallel
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-def test_vllm_uneven_decode_tp_padding():
-    """Three decode tokens run through EP-internal TP sequence sharding."""
-    world_size = (
-        dist.get_world_size()
-        if dist.is_initialized()
-        else int(os.environ.get("WORLD_SIZE", "1"))
-    )
-    if world_size != 4:
-        pytest.skip(f"requires exactly 4 GPUs, got {world_size}")
-
-    from torchtitan.experiments.rl.examples.alphabet_sort.config_registry import (
-        rl_grpo_qwen3_moe_debug_varlen,
-    )
-    from torchtitan.experiments.rl.tests.test_bitwise_parity import (
-        _make_prompt_tokens,
-        _run_engine,
-        build_inference_engine,
-    )
-
-    config = rl_grpo_qwen3_moe_debug_varlen()
-    config.generator.parallelism.data_parallel_degree = 1
-    config.generator.parallelism.tensor_parallel_degree = 4
-    config.generator.gpu_memory_limit = 0.5
-
-    temporary_dump_folder = None
-    if not dist.is_initialized():
-        temporary_dump_folder = tempfile.mkdtemp(prefix="rl_generator_moe_")
-        dist_utils.init_distributed(
-            CommConfig(),
-            base_folder=temporary_dump_folder,
-        )
-
-    register_to_vllm(
-        config.model_spec,
-        parallelism=config.generator.parallelism,
-        compile_config=config.compile,
-        checkpoint_config=CheckpointManager.Config(enable=False),
-        override=config.generator.override,
-    )
-
-    engine = build_inference_engine(config)
-    try:
-        prompt_ids = _make_prompt_tokens(3, 100, engine.get_tokenizer())
-        outputs = _run_engine(
-            engine,
-            "uneven_decode",
-            prompt_ids,
-            SamplingParams(
-                temperature=0.0,
-                top_p=1.0,
-                max_tokens=2,
-                ignore_eos=True,
-                logprobs=1,
-                output_kind=RequestOutputKind.FINAL_ONLY,
-            ),
-        )
-
-        for output in outputs:
-            sample = output.outputs[0]
-            assert len(sample.token_ids) == 2
-            assert len(sample.logprobs) == 2
-            assert all(
-                math.isfinite(list(logprobs.values())[0].logprob)
-                for logprobs in sample.logprobs
-            )
-    finally:
-        if dist.is_initialized():
-            dist.barrier()
-        renderer = getattr(engine, "renderer", None)
-        if renderer is not None:
-            renderer.shutdown()
-        del engine
-        gc.collect()
-        torch.cuda.empty_cache()
-        if temporary_dump_folder is not None:
-            shutil.rmtree(temporary_dump_folder, ignore_errors=True)

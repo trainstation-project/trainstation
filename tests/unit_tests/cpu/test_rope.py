@@ -4,9 +4,6 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-import dataclasses
-import importlib.util
-import math
 import unittest
 from unittest.mock import patch
 
@@ -23,7 +20,6 @@ from torchtitan.models.common.rope import (
     _yarn_inv_freq,
     ComplexRoPE,
     CosSinRoPE,
-    RoPE,
 )
 
 
@@ -174,71 +170,6 @@ class TestRoPEPositionBoundsCosSin(unittest.TestCase):
             self.rope(xq, xk, positions)
 
 
-_HAS_ATTN_GYM = importlib.util.find_spec("attn_gym") is not None
-if _HAS_ATTN_GYM:
-    # The qwen3_5 package imports its GDN layer, which requires attn_gym.
-    from torchtitan.models.qwen3_5.rope import MRoPE
-
-
-@unittest.skipUnless(_HAS_ATTN_GYM, "qwen3_5 requires attn_gym")
-class TestMRoPECache(unittest.TestCase):
-    def test_rejects_invalid_sections(self):
-        for sections, error in (
-            ([2, 1], "must have 3 entries"),
-            ([4, 3, -1], "must be non-negative"),
-            ([1, 1, 1], "must sum to dim // 2"),
-        ):
-            with self.subTest(sections=sections):
-                with self.assertRaisesRegex(ValueError, error):
-                    MRoPE.Config(
-                        dim=12,
-                        max_context_length=8,
-                        mrope_section=sections,
-                    ).build()
-
-    def test_rejects_invalid_position_width(self):
-        num_tokens, head_dim = 2, 12
-        rope = MRoPE.Config(
-            dim=head_dim,
-            max_context_length=8,
-            mrope_section=[2, 2, 2],
-        ).build()
-        x = torch.randn(num_tokens, 1, head_dim)
-
-        for width in (2, 4):
-            with self.subTest(width=width):
-                with self.assertRaisesRegex(ValueError, "must have shape"):
-                    rope(x, x, torch.zeros(num_tokens, width, dtype=torch.long))
-
-    def test_forward_accepts_three_axis_positions(self):
-        torch.manual_seed(42)
-        num_tokens, n_heads = 6, 4
-        head_dim = 12
-        rope = MRoPE.Config(
-            dim=head_dim,
-            max_context_length=8,
-            mrope_section=[2, 2, 2],
-        ).build()
-        # (tokens, 3): per-token [temporal, height, width] positions.
-        position_ids = torch.tensor(
-            [
-                [0, 1, 2],
-                [1, 2, 3],
-                [2, 3, 4],
-                [3, 4, 5],
-                [4, 5, 6],
-                [5, 6, 7],
-            ]
-        )
-        xq = torch.randn(num_tokens, n_heads, head_dim)
-        xk = torch.randn(num_tokens, n_heads, head_dim)
-
-        xq_out, xk_out = rope(xq, xk, position_ids)
-
-        self.assertEqual(xq_out.shape, xq.shape)
-        self.assertEqual(xk_out.shape, xk.shape)
-
-
 class TestYaRNScaling(unittest.TestCase):
     """YaRN follows the explicit scaling policy, not the cache length.
 
@@ -279,27 +210,6 @@ class TestYaRNScaling(unittest.TestCase):
 
         self.assertFalse(torch.equal(yarn.cache[1], unscaled.cache[1]))
 
-    def test_deepseek_mscale_applies_below_original_sequence_length(self):
-        from torchtitan.models.deepseek_v3 import deepseekv3_configs
-        from torchtitan.models.deepseek_v3.model import Attention
-
-        build_config, max_context_length = deepseekv3_configs["debugmodel"]
-        model_config = build_config("flex", "standard", seq_len=max_context_length)
-        attention_config = model_config.layers[0].attention
-        assert isinstance(attention_config, Attention.Config)
-        attention_config.rope = dataclasses.replace(
-            attention_config.rope,
-            max_context_length=attention_config.rope.original_seq_len // 2,
-        )
-        attention = attention_config.build()
-
-        expected_mscale = (
-            0.1 * attention_config.mscale * math.log(attention_config.rope.rope_factor)
-            + 1.0
-        )
-        expected_softmax_scale = attention.qk_head_dim**-0.5 * expected_mscale**2
-        self.assertAlmostEqual(attention.softmax_scale, expected_softmax_scale)
-
 
 class TestPerLayerRoPECache(unittest.TestCase):
     def test_gqa_attention_uses_layer_rope_cache(self):
@@ -334,28 +244,6 @@ class TestPerLayerRoPECache(unittest.TestCase):
 
         self.assertIsNotNone(attention.rope)
         self.assertEqual(out.shape, x.shape)
-
-    def test_decoder_builds_distinct_rope_modules_per_attention_layer(self):
-        from torchtitan.models.llama3 import llama3_configs
-
-        build_config, max_context_length = llama3_configs["debugmodel"]
-        model = build_config("flex", seq_len=max_context_length).build()
-        layer_ropes = [layer.attention.rope for layer in model.layers.values()]
-
-        self.assertTrue(all(isinstance(rope, RoPE) for rope in layer_ropes))
-        self.assertEqual(len({id(rope) for rope in layer_ropes}), len(layer_ropes))
-
-    def test_decoder_builds_distinct_rope_configs_per_attention_layer(self):
-        from torchtitan.models.llama3 import llama3_configs
-
-        build_config, max_context_length = llama3_configs["debugmodel"]
-        cfg = build_config("flex", seq_len=max_context_length)
-        layer_rope_cfgs = [layer.attention.rope for layer in cfg.layers]
-
-        self.assertEqual(
-            len({id(rope_cfg) for rope_cfg in layer_rope_cfgs}),
-            len(layer_rope_cfgs),
-        )
 
 
 if __name__ == "__main__":

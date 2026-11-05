@@ -89,11 +89,11 @@ class ConfigManager:
 
         if module_name is None:
             raise ValueError(
-                "--module is required. Example: --module llama3 --config llama3_debugmodel"
+                "--module is required. Example: --module <module> --config <config_function>"
             )
         if config_name is None:
             raise ValueError(
-                "--config is required. Example: --module llama3 --config llama3_debugmodel"
+                "--config is required. Example: --module <module> --config <config_function>"
             )
 
         from torchtitan.experiments import _supported_experiments
@@ -129,8 +129,8 @@ class ConfigManager:
                 )
         else:
             # Fully qualified module path: try appending .config_registry first,
-            # then fall back to importing directly (e.g., torchtitan.models.llama3
-            # -> torchtitan.models.llama3.config_registry)
+            # then fall back to importing directly (e.g., my_pkg.my_model
+            # -> my_pkg.my_model.config_registry)
             for candidate in (f"{module_name}.config_registry", module_name):
                 try:
                     module = importlib.import_module(candidate)
@@ -296,10 +296,10 @@ if __name__ == "__main__":
     #
     # Examples:
     #   Parse and print a config with CLI arguments:
-    #     > python -m torchtitan.config.manager --module llama3 --config llama3_debugmodel
+    #     > python -m torchtitan.config.manager --module <module> --config <config_function>
     #
     #   Show help message:
-    #     > python -m torchtitan.config.manager --module llama3 --config llama3_debugmodel --help
+    #     > python -m torchtitan.config.manager --module <module> --config <config_function> --help
     #
     # -----------------------------------------------------------------------------
 

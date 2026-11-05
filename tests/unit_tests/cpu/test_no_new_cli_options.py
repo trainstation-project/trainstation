@@ -358,21 +358,9 @@ def _declared_cli_options(
     return options
 
 
-_GUARDED_CONFIGS = (
-    ("llama3", "llama3_debugmodel"),
-    ("llama3", "sft_debugmodel"),
-    ("deepseek_v3", "deepseek_v3_debugmodel"),
-    ("deepseek_v4", "deepseek_v4_debugmodel"),
-    ("qwen3", "qwen3_debugmodel"),
-    ("qwen3_5", "qwen35_debugmodel_moe"),
-    ("qwen3_6", "qwen36_debugmodel_moe"),
-    ("qwen3_8", "qwen38_debugmodel_moe"),
-    ("gpt_oss", "gpt_oss_debugmodel"),
-    ("flux", "flux_debugmodel"),
-    ("kimi_k2_7", "kimi_k2_5_debugmodel"),
-    ("kimi_k3", "kimi_k3_debugmodel"),
-    ("muse_glimmer", "muse_glimmer_debugmodel_mm"),
-)
+# One (module, config) entry point per in-tree model. Empty while the repo
+# ships no models; add one per model when models are added back.
+_GUARDED_CONFIGS: tuple[tuple[str, str], ...] = ()
 
 
 def _guarded_configs():
