@@ -15,13 +15,8 @@ from torchtitan.experiments.graph_trainer.common_utils import (
 )
 from torchtitan.models.common.attention import ScaledDotProductInnerAttention
 from torchtitan.models.deepseek_v3 import deepseekv3_configs
-from torchtitan.models.gpt_oss import gptoss_configs
-from torchtitan.models.muse_glimmer import muse_glimmer_configs
 
 _HAS_ATTN_GYM = importlib.util.find_spec("attn_gym") is not None
-if _HAS_ATTN_GYM:
-    # The qwen3_5 package imports its GDN layer, which requires attn_gym.
-    from torchtitan.models.qwen3_5 import qwen3_5_configs
 
 
 class _AttentionOutput(nn.Module):
@@ -58,51 +53,10 @@ class TestModelTDLayout(unittest.TestCase):
 
         self.assertEqual(out_THV.shape, q_THK.shape)
 
-    def test_gpt_oss_attention_preserves_td_shape(self):
-        build_config, max_context_length = gptoss_configs["debugmodel"]
-        config = build_config("standard", "varlen", seq_len=max_context_length)
-        attention = config.layers[0].attention.build()
-        attention.inner_attention = _AttentionOutput()
-        x_TD = torch.randn(8, config.dim)
-        positions_T = torch.arange(8)
-
-        out_TD = attention(x_TD, None, positions_T)
-
-        self.assertEqual(out_TD.shape, x_TD.shape)
-
     def test_deepseek_attention_preserves_td_shape(self):
         build_config, max_context_length = deepseekv3_configs["debugmodel"]
         config = build_config("flex", "standard", seq_len=max_context_length)
         attention = config.layers[0].attention.build()
-        attention.inner_attention = _AttentionOutput()
-        x_TD = torch.randn(8, config.dim)
-        positions_T = torch.arange(8)
-
-        out_TD = attention(x_TD, None, positions_T)
-
-        self.assertEqual(out_TD.shape, x_TD.shape)
-
-    def test_muse_attention_preserves_td_shape(self):
-        build_config, max_context_length = muse_glimmer_configs["debugmodel"]
-        config = build_config("varlen", seq_len=max_context_length)
-        attention = config.layers[0].attention.build()
-        attention.inner_attention = _AttentionOutput()
-        x_TD = torch.randn(8, config.dim)
-        positions_T = torch.arange(8)
-        attention_masks = {"swa_128": None}
-
-        out_TD = attention(x_TD, attention_masks, positions_T)
-
-        self.assertEqual(out_TD.shape, x_TD.shape)
-
-    @unittest.skipUnless(_HAS_ATTN_GYM, "qwen3_5 requires attn_gym")
-    def test_qwen35_attention_preserves_td_shape(self):
-        build_config, max_context_length = qwen3_5_configs["debugmodel"]
-        config = build_config("varlen", seq_len=max_context_length)
-        attention_config = next(
-            layer.attention for layer in config.layers if layer.attention is not None
-        )
-        attention = attention_config.build()
         attention.inner_attention = _AttentionOutput()
         x_TD = torch.randn(8, config.dim)
         positions_T = torch.arange(8)

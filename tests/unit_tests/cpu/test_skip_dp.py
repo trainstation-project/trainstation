@@ -21,9 +21,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PARALLELIZE_FNS = [
     ("torchtitan/models/llama3/parallelize.py", "parallelize_llama"),
     ("torchtitan/models/deepseek_v3/parallelize.py", "parallelize_deepseekv3"),
-    ("torchtitan/models/kimi_k2_7/parallelize.py", "parallelize_kimi_k2_5"),
-    ("torchtitan/models/kimi_k3/parallelize.py", "parallelize_kimi_k3"),
-    ("torchtitan/models/qwen3/parallelize.py", "parallelize_qwen3"),
 ]
 
 

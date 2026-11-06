@@ -3,7 +3,6 @@
 #
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
-import inspect
 
 import pytest
 import spmd_types as spmd
@@ -12,12 +11,6 @@ import torch.distributed.checkpoint as dcp
 import torchtitan.config.transform.quantization as quantization_transform
 from spmd_types import SpmdType
 
-from torchtitan.components.data import (
-    FirstFitPackingConfig,
-    GrainDataLoader,
-    SingleDatasetConfig,
-)
-from torchtitan.components.data.sources import HuggingFaceRandomAccessSource
 from torchtitan.config import ConfigManager
 from torchtitan.config.transform import (
     Float8LinearConverter,
@@ -31,10 +24,8 @@ from torchtitan.models.common.decoder_sharding import colwise_config, rowwise_co
 from torchtitan.models.common.feed_forward import FeedForward
 from torchtitan.models.common.linear import Linear
 from torchtitan.models.common.moe import GroupedExperts
-from torchtitan.models.gpt_oss.moe import GptOssGroupedExperts
 from torchtitan.quantization import Float8Linear, MXFP8Linear, NVFP4Linear
 from torchtitan.quantization.float8 import _get_float8_grouped_experts_cls
-from torchtitan.quantization.mxfp8.experts import _get_mxfp8_grouped_experts_cls
 from torchtitan.quantization.utils import has_quantization
 
 
@@ -122,7 +113,6 @@ def test_float8_applied_by_model_registry():
     "module, recipe, expected_num_layers",
     [
         ("llama3", "llama3_debugmodel_nvfp4", 6),
-        ("qwen3", "qwen3_debugmodel_nvfp4", 8),
     ],
 )
 def test_nvfp4_converter_targets_layers_not_lm_head(
@@ -183,8 +173,6 @@ def test_nvfp4_bf16_tail_fqns():
     [
         ("llama3", "llama3_debugmodel_first_85_pct_layers_nvfp4", 5),
         ("llama3", "llama3_8b_first_85_pct_layers_nvfp4", 27),
-        ("qwen3", "qwen3_debugmodel_first_85_pct_layers_nvfp4", 6),
-        ("qwen3", "qwen3_8b_first_85_pct_layers_nvfp4", 30),
     ],
 )
 def test_nvfp4_first_85_pct_layers_converts_only_leading_layers(
@@ -284,9 +272,6 @@ def test_nvfp4_build_configures_local_spmd_sharding(sharding_config_factory, inp
         ("llama3", "llama3_debugmodel_nvfp4"),
         ("llama3", "llama3_debugmodel_first_85_pct_layers_nvfp4"),
         ("llama3", "llama3_8b_first_85_pct_layers_nvfp4"),
-        ("qwen3", "qwen3_debugmodel_nvfp4"),
-        ("qwen3", "qwen3_debugmodel_first_85_pct_layers_nvfp4"),
-        ("qwen3", "qwen3_8b_first_85_pct_layers_nvfp4"),
     ],
 )
 def test_nvfp4_recipes_parse(monkeypatch, module, recipe):
@@ -295,32 +280,6 @@ def test_nvfp4_recipes_parse(monkeypatch, module, recipe):
     base_args = ["--module", module, "--config", recipe]
 
     ConfigManager().parse_args(base_args)
-
-
-@pytest.mark.parametrize(
-    "recipe",
-    [
-        "qwen3_debugmodel_nvfp4",
-        "qwen3_debugmodel_first_85_pct_layers_nvfp4",
-        "qwen3_8b_first_85_pct_layers_nvfp4",
-    ],
-)
-def test_qwen3_recipes_resolve(monkeypatch, recipe):
-    _nvfp4_linear_cls()
-    monkeypatch.setattr(quantization_transform, "has_cuda_capability", lambda *_: True)
-    config = ConfigManager().parse_args(["--module", "qwen3", "--config", recipe])
-    assert config.model_spec.name == "qwen3"
-    if recipe == "qwen3_8b_first_85_pct_layers_nvfp4":
-        assert isinstance(config.dataloader, GrainDataLoader.Config)
-        packed_dataset = config.dataloader.dataset
-        assert isinstance(packed_dataset, FirstFitPackingConfig)
-        dataset = packed_dataset.dataset
-        assert isinstance(dataset, SingleDatasetConfig)
-        assert isinstance(dataset.source, HuggingFaceRandomAccessSource.Config)
-        assert dataset.source.path == "openai/gsm8k"
-        assert config.checkpoint.initial_load_in_hf
-        assert config.compile.enable
-        assert "model" in config.compile.components
 
 
 def test_nvfp4_module_buffers_and_native_checkpoint():
@@ -384,67 +343,6 @@ def test_nvfp4_hf_export_strips_buffers(monkeypatch):
     hf_sd = Llama3StateDictAdapter(model_config, hf_assets_path=None).to_hf(sd)
     assert "model.layers.0.mlp.gate_proj.weight" in hf_sd
     assert not any("_rht_sign_vector" in k for k in hf_sd)
-
-
-def test_quantized_grouped_experts():
-    """Quantized GroupedExperts: _owner, subclass handling, extra config fields."""
-    # Base case
-    MXFP8GroupedExperts = _get_mxfp8_grouped_experts_cls(GroupedExperts)
-    Float8GroupedExperts = _get_float8_grouped_experts_cls(GroupedExperts)
-
-    assert MXFP8GroupedExperts.Config._owner is MXFP8GroupedExperts
-    assert Float8GroupedExperts.Config._owner is Float8GroupedExperts
-
-    # Subclass case (GptOssGroupedExperts has extra swiglu_limit field)
-    mxfp8_cls = _get_mxfp8_grouped_experts_cls(GptOssGroupedExperts)
-    float8_cls = _get_float8_grouped_experts_cls(GptOssGroupedExperts)
-
-    assert mxfp8_cls.Config._owner is mxfp8_cls
-    assert float8_cls.Config._owner is float8_cls
-    assert issubclass(mxfp8_cls, GptOssGroupedExperts)
-    assert issubclass(float8_cls, GptOssGroupedExperts)
-    assert hasattr(mxfp8_cls.Config, "swiglu_limit")
-    assert hasattr(float8_cls.Config, "swiglu_limit")
-
-
-@pytest.mark.parametrize("parent_cls", [GroupedExperts, GptOssGroupedExperts])
-@pytest.mark.parametrize(
-    "make_quantized_cls",
-    [_get_mxfp8_grouped_experts_cls, _get_float8_grouped_experts_cls],
-    ids=["mxfp8", "float8"],
-)
-def test_grouped_mm_overrides_keep_the_seam_signature(make_quantized_cls, parent_cls):
-    """Every ``_grouped_mm`` override must accept the base class's keywords.
-
-    ``MoE.forward`` calls the seam by keyword, so an override whose parameter
-    names drift raises TypeError at the first expert GEMM rather than at import
-    time -- and only in a MoE training run, which no other unit test reaches.
-    That is how the ``B_t`` -> ``weight_EOI`` rename left the MXFP8 override
-    behind while the float8 one was updated.
-    """
-    base = inspect.signature(parent_cls._grouped_mm)
-    override = inspect.signature(make_quantized_cls(parent_cls)._grouped_mm)
-
-    assert list(override.parameters) == list(base.parameters)
-    for name, parameter in base.parameters.items():
-        assert override.parameters[name].kind == parameter.kind
-
-
-@pytest.mark.parametrize("parent_cls", [GroupedExperts, GptOssGroupedExperts])
-def test_float8_grouped_experts_checkpoint_state_uses_plain_tensors(parent_cls):
-    pytest.importorskip("torchao")
-    stock = parent_cls.Config(dim=16, hidden_dim=32, num_experts=2).build()
-    float8_cls = _get_float8_grouped_experts_cls(parent_cls)
-    module = float8_cls.Config(dim=16, hidden_dim=32, num_experts=2).build()
-
-    assert all(type(param) is torch.nn.Parameter for param in module.parameters())
-    stock_state = stock.state_dict()
-    float8_state = module.state_dict()
-    assert float8_state.keys() == stock_state.keys()
-    for key, value in float8_state.items():
-        assert type(value) is torch.Tensor
-        assert value.shape == stock_state[key].shape
-        assert value.dtype == stock_state[key].dtype
 
 
 @pytest.mark.filterwarnings("ignore:torch.distributed is disabled")

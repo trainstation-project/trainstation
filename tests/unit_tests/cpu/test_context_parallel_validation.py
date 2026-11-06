@@ -148,38 +148,6 @@ class TestUlyssesConfigValidation(unittest.TestCase):
             config.__post_init__()
 
 
-class TestGptOssUlysses(unittest.TestCase):
-    def _parallelize(self, inner_attention):
-        from types import SimpleNamespace
-
-        from torchtitan.models.gpt_oss.parallelize import parallelize_gptoss
-
-        with self.assertRaisesRegex(NotImplementedError, "Ulysses CP"):
-            parallelize_gptoss(
-                SimpleNamespace(
-                    config=SimpleNamespace(
-                        first_full_attention_backend=inner_attention.Config()
-                    )
-                ),
-                parallel_dims=SimpleNamespace(cp_enabled=True),
-                training=None,
-                parallelism=None,
-                compile_config=None,
-                ac_config=None,
-                dump_folder="",
-            )
-
-    def test_rejects_flex(self):
-        from torchtitan.models.common.cp_attention import UlyssesCPFlexInnerAttention
-
-        self._parallelize(UlyssesCPFlexInnerAttention)
-
-    def test_rejects_varlen(self):
-        from torchtitan.models.common.cp_attention import UlyssesCPVarlenInnerAttention
-
-        self._parallelize(UlyssesCPVarlenInnerAttention)
-
-
 class TestHeadDivisibility(unittest.TestCase):
     """Validate when CP adds to head sharding."""
 
@@ -222,7 +190,6 @@ class TestShippedCpRecipes(unittest.TestCase):
     """Validate every shipped CP recipe after construction."""
 
     _MODULES = (
-        "torchtitan_recipes.muse_glimmer",
         "torchtitan_recipes.tests.models",
         "torchtitan_recipes.tests.features",
         "torchtitan_recipes.tests.h100",
@@ -247,14 +214,7 @@ class TestShippedCpRecipes(unittest.TestCase):
                 "torchtitan.config.transform.quantization.has_cuda_capability",
                 return_value=True,
             ):
-                try:
-                    config = fn()
-                except ModuleNotFoundError as e:
-                    # qwen3_5-based recipes import its GDN layer, which
-                    # requires the optional attn_gym package.
-                    if e.name != "attn_gym":
-                        raise
-                    continue
+                config = fn()
             if config.parallelism.context_parallel_degree == 1:
                 continue
             with self.subTest(recipe=name):

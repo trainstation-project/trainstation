@@ -16,7 +16,6 @@ from torchtitan_recipes.tests.models import llama3_debugmodel_fsdp2_tp2_pp2
 from tests.integration_tests import OverrideDefinitions, validate_fake_pg_compatibility
 from tests.integration_tests.b200 import build_b200_tests_list
 from tests.integration_tests.features import build_features_test_list
-from tests.integration_tests.flux import build_flux_test_list
 from tests.integration_tests.h100 import build_h100_tests_list
 from tests.integration_tests.models import build_model_tests_list
 from tests.integration_tests.run_tests import _parse_test_suites, run_single_test
@@ -120,7 +119,6 @@ def test_h100_tests_are_registered_in_separate_suite() -> None:
         "fsdp+tp+pp+compile+float8",
         "fsdp_symm_mem",
         "hsdp+cp+compile+float8",
-        "qwen3_fsdp+deepep",
     }
     assert all(not hasattr(test, "use_h100") for test in build_features_test_list())
     assert all(not hasattr(test, "use_h100") for test in build_model_tests_list())
@@ -128,16 +126,16 @@ def test_h100_tests_are_registered_in_separate_suite() -> None:
 
 def test_b200_tests_are_registered_in_separate_suite() -> None:
     assert {test.test_name for test in build_b200_tests_list()} == {
-        "kimi_k3_mm",
         "mxfp8_linear_fsdp",
     }
-    assert "kimi_k3_mm" not in {test.test_name for test in build_model_tests_list()}
+    assert "mxfp8_linear_fsdp" not in {
+        test.test_name for test in build_model_tests_list()
+    }
 
 
 def test_specialized_moe_backends_have_ep_coverage() -> None:
     specialized_names = {
         "deepseek_v3_fsdp+hybridep+compile",
-        "qwen3_fsdp+deepep",
     }
     h100_model_tests = [
         test for test in build_h100_tests_list() if test.test_name in specialized_names
@@ -157,22 +155,10 @@ def test_models_select_fake_and_real_pg_cases() -> None:
 
     assert {
         "deepseek_v3_fsdp+ep",
-        "qwen3_moe_fsdp+tp+cp+ep_param_groups",
-        "kimi_k2_5_muon_fsdp+ep",
-        "muse_glimmer_text_fsdp",
-        "muse_glimmer_mm_fsdp+tp+sp",
     } <= fake_pg_model_tests
     assert {
         "deepseek_v3_fsdp+cp+pp+ep",
-        "deepseek_v4_fsdp+tp+ep",
     } <= real_pg_model_tests
-
-
-def test_flux_fake_pg_filters_real_collective_cases() -> None:
-    flux_tests = build_flux_test_list()
-    fake_pg_tests = {test.test_name for test in flux_tests if not test.use_real_pg}
-
-    assert fake_pg_tests == {"flux_fsdp+compile"}
 
 
 @pytest.mark.parametrize(

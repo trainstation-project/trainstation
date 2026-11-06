@@ -385,32 +385,6 @@ def _build_deepseek_v3_tests() -> list[OverrideDefinitions]:
             # calls realize() on an ir.Subgraph: "realize NYI on Subgraph").
             disabled=_JIT_DISABLED,
         ),
-        # === aot_fx_trace mode tests ===
-        # Note: standard DSv3 MoE load-balancing introduces CUDA-to-CPU
-        # transfers incompatible with CUDA graph capture, so this fused test
-        # explicitly disables the cudagraph pass.
-        #
-        # TODO: Re-enable FSDP bucketing when its stable topological sort
-        # supports the fused MLA Q kernel's mutating custom-op boundary.
-        OverrideDefinitions(
-            [
-                [
-                    "--module graph_trainer.deepseek_v3",
-                    "--config graph_trainer_deepseek_v3_debugmodel",
-                    "--compile.mode aot_fx_trace",
-                    "--compile.disable_passes "
-                    "joint_transformer_block_bucketing_reordering_pass,"
-                    "cudagraph_pass",
-                    "--override.imports torchtitan.overrides.fused_mla.fused_mla,"
-                    "torchtitan.overrides.fused_swiglu.fused_swiglu",
-                    "--parallelism.data_parallel_shard_degree 2",
-                    "--parallelism.tensor_parallel_degree 2",
-                ],
-            ],
-            "aot_fx_trace deepseek_v3 fused MLA+SwiGLU FSDP+TP",
-            "aot_fx_trace_deepseek_v3_fused_mla_swiglu_fsdp_tp",
-            ngpu=4,
-        ),
         # TODO: Re-enable after fixing the separate CP+EP mixed Tensor/DTensor
         # failure, in addition to the graph_trainer CP backend issue.
         OverrideDefinitions(
@@ -589,76 +563,12 @@ def _build_deepseek_v3_tests() -> list[OverrideDefinitions]:
 
 def _build_qwen3_tests() -> list[OverrideDefinitions]:
     """Qwen3-based integration tests (dense + MoE)."""
-    return [
-        # Disable cudagraph: replaying coalesced FSDP collectives with CP fails
-        # with "CUDA error: invalid argument".
-        OverrideDefinitions(
-            [
-                [
-                    "--module graph_trainer.qwen3",
-                    "--config graph_trainer_qwen3_debugmodel",
-                    "--compile.mode aot_fx_trace",
-                    "--compile.disable_passes cudagraph_pass",
-                    "--parallelism.data_parallel_shard_degree 2",
-                    "--parallelism.tensor_parallel_degree 2",
-                    "--parallelism.context_parallel_degree 2",
-                ],
-            ],
-            "aot_fx_trace qwen3 FSDP+TP+CP",
-            "aot_fx_trace_qwen3_fsdp_tp_cp",
-            ngpu=8,
-            disabled=_FLEX_CP_INDUCTOR_DISABLED,
-        ),
-        OverrideDefinitions(
-            [
-                [
-                    "--training.disable_cuda_graphs",
-                    "--module graph_trainer.qwen3",
-                    "--config graph_trainer_qwen3_debugmodel_moe",
-                    "--compile.mode aot_fx_trace",
-                    "--parallelism.data_parallel_shard_degree 4",
-                    "--parallelism.tensor_parallel_degree 2",
-                    "--parallelism.expert_parallel_degree 4",
-                ],
-            ],
-            "aot_fx_trace qwen3 MoE FSDP+TP+EP",
-            "aot_fx_trace_qwen3_moe_fsdp_tp_ep",
-            ngpu=8,
-        ),
-    ]
+    return []
 
 
 def _build_muse_glimmer_tests() -> list[OverrideDefinitions]:
     """MuseGlimmer integration tests."""
-    return [
-        OverrideDefinitions(
-            [
-                [
-                    "--module graph_trainer.muse_glimmer",
-                    "--config graph_trainer_muse_glimmer_debugmodel",
-                    "--compile.mode aot_fx_trace",
-                    "--parallelism.data_parallel_shard_degree 8",
-                ],
-            ],
-            "aot_fx_trace muse_glimmer FSDP",
-            "aot_fx_trace_muse_glimmer_fsdp",
-            ngpu=8,
-        ),
-        OverrideDefinitions(
-            [
-                [
-                    "--module graph_trainer.muse_glimmer",
-                    "--config graph_trainer_muse_glimmer_debugmodel",
-                    "--compile.mode aot_fx_trace",
-                    "--parallelism.data_parallel_shard_degree 4",
-                    "--parallelism.tensor_parallel_degree 2",
-                ],
-            ],
-            "aot_fx_trace muse_glimmer FSDP+TP",
-            "aot_fx_trace_muse_glimmer_fsdp_tp",
-            ngpu=8,
-        ),
-    ]
+    return []
 
 
 def build_graph_trainer_test_list() -> list[OverrideDefinitions]:

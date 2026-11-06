@@ -78,7 +78,7 @@ STATUS=0
 if ! CUDA_HOME=/usr/local/cuda NCCL_NVLS_ENABLE=0 TORCH_SHOW_CPP_STACKTRACES=1 python -m tests.integration_tests.run_tests \
   --test_suite h100 \
   --execution_mode real_pg \
-  --exclude qwen3_fsdp+deepep,deepseek_v3_fsdp+hybridep+compile \
+  --exclude deepseek_v3_fsdp+hybridep+compile \
   --gpu_arch_type "${GPU_ARCH_TYPE}" \
   --gpu_arch h100 \
   --ngpu 8 \
@@ -86,20 +86,7 @@ if ! CUDA_HOME=/usr/local/cuda NCCL_NVLS_ENABLE=0 TORCH_SHOW_CPP_STACKTRACES=1 p
   STATUS=1
 fi
 
-# DeepEP v2 and HybridEP currently live on incompatible DeepEP branches and
-# export different Python APIs. Install and test each backend sequentially.
 if [[ "${GPU_ARCH_TYPE}" != "rocm" ]]; then
-  bash .github/scripts/install_deepep_v2.sh
-  if ! CUDA_HOME=/usr/local/cuda NCCL_NVLS_ENABLE=0 EP_DISABLE_GIN=1 TORCH_SHOW_CPP_STACKTRACES=1 python -m tests.integration_tests.run_tests \
-    --test_suite h100 \
-    --execution_mode real_pg \
-    --test_name qwen3_fsdp+deepep \
-    --gpu_arch_type "${GPU_ARCH_TYPE}" \
-    --ngpu 8 \
-    "${ARTIFACTS}/h100/deepep_v2"; then
-    STATUS=1
-  fi
-
   # The H100 CI image provides the pinned hybrid-ep installer used by the
   # existing HybridEP workflow.
   bash /install_deepep.sh

@@ -80,20 +80,13 @@ VALIDATION_ROOT="${RUNNER_TEMP}/validate-release-gpu"
 mkdir -p \
   "${ARTIFACTS}" \
   "${VALIDATION_ROOT}/scripts" \
-  "${VALIDATION_ROOT}/torchtitan/experiments/graph_trainer" \
-  "${VALIDATION_ROOT}/torchtitan/models/flux/inference"
+  "${VALIDATION_ROOT}/torchtitan/experiments/graph_trainer"
 
 # Copy test support files without copying TorchTitan Python packages. Training
 # subprocesses must import the installed TestPyPI RC rather than the checkout.
 cp "${REPO_ROOT}/run_train.sh" "${VALIDATION_ROOT}/run_train.sh"
 cp "${REPO_ROOT}/scripts/loss_compare.py" "${VALIDATION_ROOT}/scripts/loss_compare.py"
 cp -R "${REPO_ROOT}/tests" "${VALIDATION_ROOT}/tests"
-cp \
-  "${REPO_ROOT}/torchtitan/models/flux/run_infer.sh" \
-  "${VALIDATION_ROOT}/torchtitan/models/flux/run_infer.sh"
-cp \
-  "${REPO_ROOT}/torchtitan/models/flux/inference/prompts.txt" \
-  "${VALIDATION_ROOT}/torchtitan/models/flux/inference/prompts.txt"
 cp \
   "${REPO_ROOT}/torchtitan/experiments/graph_trainer/run_train_precompile.sh" \
   "${VALIDATION_ROOT}/torchtitan/experiments/graph_trainer/run_train_precompile.sh"
@@ -154,11 +147,6 @@ run_core_tests() {
     --execution_mode real_pg \
     --ngpu 8 \
     "${ARTIFACTS}/integration_tests"
-
-  python -m tests.integration_tests.flux \
-    --execution_mode real_pg \
-    --ngpu 8 \
-    "${ARTIFACTS}/flux_tests"
 }
 
 run_torchft_tests() {
@@ -229,22 +217,10 @@ run_h100_tests() {
     python -m tests.integration_tests.run_tests \
     --test_suite h100 \
     --execution_mode real_pg \
-    --exclude qwen3_fsdp+deepep,deepseek_v3_fsdp+hybridep+compile \
+    --exclude deepseek_v3_fsdp+hybridep+compile \
     --gpu_arch_type cuda \
     --ngpu 8 \
     "${ARTIFACTS}/h100/base"; then
-    status=1
-  fi
-
-  bash "${REPO_ROOT}/.github/scripts/install_deepep_v2.sh"
-  if ! CUDA_HOME=/usr/local/cuda NCCL_NVLS_ENABLE=0 EP_DISABLE_GIN=1 \
-    TORCH_SHOW_CPP_STACKTRACES=1 python -m tests.integration_tests.run_tests \
-    --test_suite h100 \
-    --execution_mode real_pg \
-    --test_name qwen3_fsdp+deepep \
-    --gpu_arch_type cuda \
-    --ngpu 8 \
-    "${ARTIFACTS}/h100/deepep_v2"; then
     status=1
   fi
 

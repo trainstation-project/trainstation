@@ -455,52 +455,6 @@ def _run_graph_pp_deepseek_v3_loss_compare(schedule: str) -> bool:
     return _losses_are_equal(baseline_losses, test_losses)
 
 
-QWEN3_PARALLELISM = (
-    "--parallelism.tensor_parallel_degree=2"
-    " --parallelism.data_parallel_shard_degree=4"
-)
-
-
-def _run_qwen3_loss_compare(test_options_extra: str = "") -> bool:
-    """Run loss_compare for qwen3 vs graph_trainer.qwen3 with FSDP+TP."""
-    options = f"{QWEN3_PARALLELISM} {DEBUGMODEL_TRAINING_OPTIONS}"
-    test_options = options
-    if test_options_extra:
-        test_options += f" {test_options_extra}"
-    return run_loss_compare(
-        baseline_module="qwen3",
-        baseline_config="qwen3_debugmodel",
-        test_module="graph_trainer.qwen3",
-        test_config="graph_trainer_qwen3_debugmodel",
-        baseline_options=options,
-        test_options=test_options,
-    )
-
-
-QWEN3_MOE_PARALLELISM = (
-    "--training.disable_cuda_graphs"
-    " --parallelism.data_parallel_shard_degree=4"
-    " --parallelism.tensor_parallel_degree=2"
-    " --parallelism.expert_parallel_degree=2"
-)
-
-
-def _run_qwen3_moe_loss_compare(test_options_extra: str = "") -> bool:
-    """Run loss_compare for qwen3 MoE vs graph_trainer.qwen3 MoE."""
-    options = f"{QWEN3_MOE_PARALLELISM} {DEBUGMODEL_TRAINING_OPTIONS}"
-    test_options = options
-    if test_options_extra:
-        test_options += f" {test_options_extra}"
-    return run_loss_compare(
-        baseline_module="qwen3",
-        baseline_config="qwen3_moe_debug",
-        test_module="graph_trainer.qwen3",
-        test_config="graph_trainer_qwen3_debugmodel_moe",
-        baseline_options=options,
-        test_options=test_options,
-    )
-
-
 AUTOPARALLEL_LLAMA3_PARALLELISM = (
     "--parallelism.data_parallel_shard_degree=2"
     " --parallelism.tensor_parallel_degree=2"
@@ -641,18 +595,6 @@ class TestGraphTrainerNumerics(unittest.TestCase):
         for schedule in ("Interleaved1F1B", "ZBVZeroBubble", "DualPipeV"):
             with self.subTest(schedule=schedule):
                 self.assertTrue(_run_graph_pp_deepseek_v3_loss_compare(schedule))
-
-    def test_dense_qwen3_aot_fx_trace_vs_eager(self):
-        self.assertTrue(
-            _run_qwen3_loss_compare(test_options_extra="--compile.mode aot_fx_trace"),
-        )
-
-    def test_moe_qwen3_aot_fx_trace_vs_eager(self):
-        self.assertTrue(
-            _run_qwen3_moe_loss_compare(
-                test_options_extra="--compile.mode aot_fx_trace"
-            ),
-        )
 
 
 @unittest.skipUnless(

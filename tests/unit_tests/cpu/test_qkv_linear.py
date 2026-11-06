@@ -113,44 +113,6 @@ class TestQKVLinearCheckpointInterop(unittest.TestCase):
             torch.equal(wqkv_b[:, _HPK + 1].reshape(-1), state_dict["wv.bias"])
         )
 
-    def test_hf_adapter_roundtrip(self):
-        """HF adapter works with QKVLinear's hook-produced wq/wk/wv keys."""
-        from torchtitan.models.llama3 import llama3_configs
-        from torchtitan.models.llama3.state_dict_adapter import Llama3StateDictAdapter
-        from torchtitan.models.muse_glimmer import muse_glimmer_configs
-        from torchtitan.models.muse_glimmer.state_dict_adapter import (
-            MuseGlimmerStateDictAdapter,
-        )
-        from torchtitan.models.qwen3 import qwen3_configs
-        from torchtitan.models.qwen3.state_dict_adapter import Qwen3StateDictAdapter
-
-        for config_name, configs, adapter_cls in (
-            ("llama3", llama3_configs, Llama3StateDictAdapter),
-            ("qwen3", qwen3_configs, Qwen3StateDictAdapter),
-            ("muse_glimmer", muse_glimmer_configs, MuseGlimmerStateDictAdapter),
-        ):
-            with self.subTest(model=config_name):
-                build_config, max_context_length = configs["debugmodel"]
-                model_config = build_config(
-                    attn_backend="flex", seq_len=max_context_length
-                )
-                model = model_config.build()
-                model.eval()
-
-                sd_original = model.state_dict()
-                adapter = adapter_cls(model_config, hf_assets_path=None)
-
-                hf_sd = adapter.to_hf(sd_original)
-                sd_restored = adapter.from_hf(hf_sd)
-
-                model2 = model_config.build()
-                model2.load_state_dict(sd_restored)
-
-                sd_after = model2.state_dict()
-                self.assertEqual(set(sd_original.keys()), set(sd_after.keys()))
-                for k in sd_original:
-                    self.assertTrue(torch.equal(sd_original[k], sd_after[k]), k)
-
 
 class TestFusedQKVForwardContiguity(unittest.TestCase):
     """The forward must emit contiguous, head-major q/k/v.

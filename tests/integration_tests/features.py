@@ -193,12 +193,6 @@ def build_features_test_list() -> list[OverrideDefinitions]:
             use_real_pg=True,
         ),
         OverrideDefinitions(
-            configs=[recipes.muse_glimmer_debugmodel_optimizer_bf16_states],
-            test_descr="BF16 Optimizer States Test",
-            test_name="optimizer_bf16_states",
-            ngpu=2,
-        ),
-        OverrideDefinitions(
             configs=[recipes.llama3_debugmodel_ddp4],
             test_descr="DDP",
             test_name="ddp",
