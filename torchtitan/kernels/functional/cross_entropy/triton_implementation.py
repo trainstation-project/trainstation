@@ -9,6 +9,8 @@
 #   per-row M, Z and target logit and a backward kernel that computes dx from
 #   the (TP-combined) M and Z; the loss is reduced from those statistics
 #   instead of with atomic_add
+# - autotune num_warps up to 16 (lm-engine: 8); the backward kernel is ~1.7x
+#   faster with 16 warps at 128K+ vocab
 
 # **************************************************
 # Copyright (c) 2026, Mayank Mishra
@@ -27,7 +29,7 @@ from ...math import ceil_divide, get_next_power_of_2, get_powers_of_2
 def _get_autotune_configs() -> list[triton.Config]:
     configs = []
     for BLOCK_SIZE_B in get_powers_of_2(1, 8):
-        for num_warps in get_powers_of_2(4, 8):
+        for num_warps in get_powers_of_2(4, 16):
             configs.append(
                 triton.Config({"BLOCK_SIZE_B": BLOCK_SIZE_B}, num_warps=num_warps)
             )
