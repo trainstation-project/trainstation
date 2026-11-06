@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 import torch.nn.functional as F
+from torch._inductor.kernel.flex.flex_cpu import check_cpu_supported
 
 from torchtitan.config.transform import (
     Float8LinearConverter,
@@ -72,6 +73,10 @@ def test_lora_model_builds():
     assert non_lora_trainable == set()
 
 
+@pytest.mark.skipif(
+    not check_cpu_supported(),
+    reason="Inductor's CPU flex_attention needs AVX2 and does not support macOS",
+)
 def test_lora_forward():
     """LoRA model forward produces correct output shape."""
     model_spec = model_registry("debugmodel")

@@ -9,6 +9,10 @@
 import unittest
 from functools import partial
 
+import pytest
+
+pytest.importorskip("triton")
+
 from torch.nn import init
 
 from torchtitan.config.override import _REGISTRY, apply_overrides, OverrideConfig

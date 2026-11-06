@@ -4,6 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import importlib.util
 from collections.abc import Callable
 from inspect import signature
 
@@ -70,21 +71,6 @@ from torchtitan.models.qwen3.config_registry import (
     qwen3_moe_debug,
     qwen3_moe_deepep,
 )
-from torchtitan.models.qwen3_5.config_registry import (
-    qwen35_debugmodel,
-    qwen35_debugmodel_moe,
-    qwen35_debugmodel_varlen_attn,
-)
-from torchtitan.models.qwen3_6.config_registry import (
-    qwen36_debugmodel,
-    qwen36_debugmodel_moe,
-    qwen36_debugmodel_varlen_attn,
-)
-from torchtitan.models.qwen3_8.config_registry import (
-    qwen38_debugmodel,
-    qwen38_debugmodel_moe,
-    qwen38_debugmodel_varlen_attn,
-)
 from torchtitan.trainer import Trainer
 
 
@@ -119,19 +105,41 @@ _DEBUG_CONFIG_FACTORIES: tuple[DebugConfigFactory, ...] = (
     qwen3_debugmodel_nvfp4,
     qwen3_moe_debug,
     qwen3_moe_deepep,
-    qwen35_debugmodel,
-    qwen35_debugmodel_moe,
-    qwen35_debugmodel_varlen_attn,
-    qwen36_debugmodel,
-    qwen36_debugmodel_moe,
-    qwen36_debugmodel_varlen_attn,
-    qwen38_debugmodel,
-    qwen38_debugmodel_moe,
-    qwen38_debugmodel_varlen_attn,
     llama3_torchft_debugmodel,
     transformers_modeling_backend_debugmodel,
     transformers_modeling_backend_debugmodel_moe,
 )
+
+# The qwen3_5 package (and qwen3_6/qwen3_8 built on it) imports its GDN layer,
+# which requires attn_gym.
+if importlib.util.find_spec("attn_gym") is not None:
+    from torchtitan.models.qwen3_5.config_registry import (
+        qwen35_debugmodel,
+        qwen35_debugmodel_moe,
+        qwen35_debugmodel_varlen_attn,
+    )
+    from torchtitan.models.qwen3_6.config_registry import (
+        qwen36_debugmodel,
+        qwen36_debugmodel_moe,
+        qwen36_debugmodel_varlen_attn,
+    )
+    from torchtitan.models.qwen3_8.config_registry import (
+        qwen38_debugmodel,
+        qwen38_debugmodel_moe,
+        qwen38_debugmodel_varlen_attn,
+    )
+
+    _DEBUG_CONFIG_FACTORIES += (
+        qwen35_debugmodel,
+        qwen35_debugmodel_moe,
+        qwen35_debugmodel_varlen_attn,
+        qwen36_debugmodel,
+        qwen36_debugmodel_moe,
+        qwen36_debugmodel_varlen_attn,
+        qwen38_debugmodel,
+        qwen38_debugmodel_moe,
+        qwen38_debugmodel_varlen_attn,
+    )
 
 
 @pytest.mark.parametrize(

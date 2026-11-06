@@ -4,6 +4,8 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import importlib
+import importlib.util
 from dataclasses import dataclass
 
 import grain.python as grain
@@ -22,9 +24,10 @@ from torchtitan.hf_datasets.multimodal.mm_datasets import (
 )
 from torchtitan.hf_datasets.multimodal.utils.image import resize_to_navit_patch_grid
 from torchtitan.models.kimi_k2_7 import config_registry as kimi_configs
-from torchtitan.models.qwen3_5 import config_registry as qwen35_configs
-from torchtitan.models.qwen3_6 import config_registry as qwen36_configs
-from torchtitan.models.qwen3_8 import config_registry as qwen38_configs
+
+# The qwen3_5 package (and qwen3_6/qwen3_8 built on it) imports its GDN layer,
+# which requires attn_gym.
+_HAS_ATTN_GYM = importlib.util.find_spec("attn_gym") is not None
 
 
 class _Tokenizer:
@@ -152,29 +155,33 @@ def test_kimi_multimodal_recipe_copies_unpacked_dataset(recipe_name):
     )
 
 
+@pytest.mark.skipif(not _HAS_ATTN_GYM, reason="qwen3_5 requires attn_gym")
 @pytest.mark.parametrize(
-    ("config_registry", "recipe_name"),
+    ("model_name", "recipe_name"),
     [
-        (qwen35_configs, "qwen35_debugmodel"),
-        (qwen35_configs, "qwen35_debugmodel_moe"),
-        (qwen35_configs, "qwen35_0_8b"),
-        (qwen35_configs, "qwen35_2b"),
-        (qwen35_configs, "qwen35_4b"),
-        (qwen35_configs, "qwen35_9b"),
-        (qwen35_configs, "qwen35_27b"),
-        (qwen35_configs, "qwen35_35b_a3b"),
-        (qwen35_configs, "qwen35_122b_a10b"),
-        (qwen35_configs, "qwen35_397b_a17b"),
-        (qwen36_configs, "qwen36_debugmodel"),
-        (qwen36_configs, "qwen36_debugmodel_moe"),
-        (qwen36_configs, "qwen36_27b"),
-        (qwen36_configs, "qwen36_35b_a3b"),
-        (qwen38_configs, "qwen38_debugmodel"),
-        (qwen38_configs, "qwen38_debugmodel_moe"),
-        (qwen38_configs, "qwen38_27b"),
+        ("qwen3_5", "qwen35_debugmodel"),
+        ("qwen3_5", "qwen35_debugmodel_moe"),
+        ("qwen3_5", "qwen35_0_8b"),
+        ("qwen3_5", "qwen35_2b"),
+        ("qwen3_5", "qwen35_4b"),
+        ("qwen3_5", "qwen35_9b"),
+        ("qwen3_5", "qwen35_27b"),
+        ("qwen3_5", "qwen35_35b_a3b"),
+        ("qwen3_5", "qwen35_122b_a10b"),
+        ("qwen3_5", "qwen35_397b_a17b"),
+        ("qwen3_6", "qwen36_debugmodel"),
+        ("qwen3_6", "qwen36_debugmodel_moe"),
+        ("qwen3_6", "qwen36_27b"),
+        ("qwen3_6", "qwen36_35b_a3b"),
+        ("qwen3_8", "qwen38_debugmodel"),
+        ("qwen3_8", "qwen38_debugmodel_moe"),
+        ("qwen3_8", "qwen38_27b"),
     ],
 )
-def test_qwen_recipe_geometry_matches_dataset_processor(config_registry, recipe_name):
+def test_qwen_recipe_geometry_matches_dataset_processor(model_name, recipe_name):
+    config_registry = importlib.import_module(
+        f"torchtitan.models.{model_name}.config_registry"
+    )
     registry_state = {
         name: (
             id(dataset),
