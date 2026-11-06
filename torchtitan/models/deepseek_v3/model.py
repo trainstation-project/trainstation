@@ -1,0 +1,266 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+import math
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+
+import spmd_types as spmd
+import torch
+from torch import nn
+
+from torchtitan.models.common.attention import (
+    AttentionMasksType,
+    BaseAttention,
+    FlexInnerAttention,
+)
+from torchtitan.models.common.decoder import TransformerBlock
+from torchtitan.models.common.linear import Linear
+from torchtitan.models.common.nn_modules import RMSNorm
+from torchtitan.models.common.rope import RoPE
+from torchtitan.models.deepseek_v3.mtp import MTPDecoder
+from torchtitan.models.utils import (
+    get_nparams_and_active_nparams,
+    quadratic_attention_flops_per_token,
+)
+from torchtitan.protocols.module import Module
+
+
+class Attention(BaseAttention):
+    """
+    Multi-head latent attention (MLA) module.
+
+    This is DeepSeek V3-specific and NOT shared with other models.
+    """
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(BaseAttention.Config):
+        n_heads: int
+        dim: int
+        wq: Linear.Config | None = None
+        wq_a: Linear.Config | None = None
+        wq_b: Linear.Config | None = None
+        wkv_a: Linear.Config
+        wkv_b: Linear.Config
+        wo: Linear.Config
+        q_lora_rank: int = 0
+        kv_lora_rank: int = 512
+        q_norm: RMSNorm.Config
+        kv_norm: RMSNorm.Config
+        qk_nope_head_dim: int = 128
+        qk_rope_head_dim: int = 64
+        v_head_dim: int = 128
+        rope: RoPE.Config
+        inner_attention: Module.Config = field(
+            default_factory=FlexInnerAttention.Config
+        )
+        mscale: float = 1.0
+
+    def __init__(self, config: Config):
+        super().__init__()
+        self.dim = config.dim
+        self.n_heads = config.n_heads
+        self.q_lora_rank = config.q_lora_rank
+        self.kv_lora_rank = config.kv_lora_rank
+        self.qk_nope_head_dim = config.qk_nope_head_dim
+        self.qk_rope_head_dim = config.qk_rope_head_dim
+        self.qk_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
+        self.v_head_dim = config.v_head_dim
+
+        if self.q_lora_rank == 0:
+            assert config.wq is not None, "wq is required when q_lora_rank == 0"
+            self.wq = config.wq.build()
+        else:
+            assert (
+                config.wq_a is not None and config.wq_b is not None
+            ), "wq_a and wq_b are required when q_lora_rank > 0"
+            self.wq_a = config.wq_a.build()
+            self.q_norm = config.q_norm.build()
+            self.wq_b = config.wq_b.build()
+
+        # TODO(fegin): revisit
+        # https://github.com/pytorch/torchtitan/pull/2785#discussion_r3034078575
+        self.wkv_a = config.wkv_a.build()
+        self.kv_norm = config.kv_norm.build()
+        self.wkv_b = config.wkv_b.build()
+        self.wo = config.wo.build()
+        self.softmax_scale = self.qk_head_dim**-0.5
+
+        if config.rope.scaling == "yarn" and config.rope.rope_factor > 1.0:
+            mscale = 0.1 * config.mscale * math.log(config.rope.rope_factor) + 1.0
+            self.softmax_scale = self.softmax_scale * mscale * mscale
+
+        self.inner_attention = config.inner_attention.build()
+        self.rope = config.rope.build()
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_masks: AttentionMasksType,
+        positions: torch.Tensor | None = None,
+    ):
+        num_tokens = x.shape[0]
+
+        # Query projection
+        if self.q_lora_rank == 0:
+            q = self.wq(x)
+        else:
+            q = self.wq_a(x)
+            q = self.wq_b(self.q_norm(q))
+
+        # TODO(pianpwk): same QKV:S(1) unflatten case handled by even sharding
+        with spmd.local():
+            q = q.view(num_tokens, -1, self.qk_head_dim)
+            if spmd.is_type_checking():
+                spmd.assert_type(
+                    q,
+                    spmd.V,
+                    spmd.PartitionSpec(("dp", "cp"), "tp", None),
+                )
+
+        q_nope, q_pe = torch.split(
+            q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
+        )
+
+        # Key-value projection
+        kv = self.wkv_a(x)
+        kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+
+        q_pe, k_pe = self.rope(q_pe, k_pe.unsqueeze(1), positions)
+        q = torch.cat([q_nope, q_pe], dim=-1)
+
+        kv = self.wkv_b(self.kv_norm(kv))
+
+        with (
+            spmd.local()
+        ):  # QKV even shard unflatten, but the expand is truly local SPMD
+            kv = kv.view(num_tokens, -1, self.qk_nope_head_dim + self.v_head_dim)
+            k_nope, v = torch.split(
+                kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1
+            )
+            k = torch.cat([k_nope, k_pe.expand(-1, k_nope.size(1), -1)], dim=-1)
+            if spmd.is_type_checking() and not torch.compiler.is_compiling():
+                for t in [k, v]:
+                    spmd.assert_type(
+                        t,
+                        spmd.V,
+                        spmd.PartitionSpec(("dp", "cp"), "tp", None),
+                    )
+
+        output = self.inner_attention(
+            q, k, v, attention_masks=attention_masks, scale=self.softmax_scale
+        ).contiguous()
+        output = output.view(num_tokens, -1)
+        return self.wo(output)
+
+
+class DeepSeekV3TransformerBlock(TransformerBlock):
+    """
+    DeepSeek V3 Transformer block with attention and feed-forward layers.
+    """
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(TransformerBlock.Config):
+        pass
+
+    def __init__(self, config: Config):
+        super().__init__()
+        self.attention = config.attention.build()
+        self.attention_norm = config.attention_norm.build()
+        self.ffn_norm = config.ffn_norm.build()
+
+        self.moe_enabled = config.moe is not None
+        if self.moe_enabled:
+            assert config.moe is not None
+            self.moe = config.moe.build()
+        else:
+            assert config.feed_forward is not None
+            self.feed_forward = config.feed_forward.build()
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_masks: AttentionMasksType | None,
+        positions: torch.Tensor | None = None,
+        *,
+        padding_mask: torch.Tensor | None = None,
+    ):
+        x = x + self.attention(self.attention_norm(x), attention_masks, positions)
+        if self.moe_enabled:
+            x = x + self.moe(self.ffn_norm(x), padding_mask_T=padding_mask)
+        else:
+            x = x + self.feed_forward(self.ffn_norm(x))
+        return x
+
+
+def get_deepseek_v3_nparams_and_flops(
+    model_config: MTPDecoder.Config,
+    model: nn.Module,
+    seq_len: int,
+    *,
+    modules_excluded_from_active_params: Iterable[nn.Module | None] = (),
+) -> tuple[int, int]:
+    """Estimate DeepSeek-style decoder FLOPs from the final model config."""
+    nparams, active_nparams = get_nparams_and_active_nparams(
+        model,
+        modules_excluded_from_active_params=modules_excluded_from_active_params,
+    )
+
+    attention_op_flops = 0
+    for layers in (model_config.layers, model_config.mtp_layers):
+        for layer in layers:
+            attention = layer.attention
+            attention_op_flops += quadratic_attention_flops_per_token(
+                num_heads=attention.n_heads,
+                qk_head_dim=(attention.qk_nope_head_dim + attention.qk_rope_head_dim),
+                v_head_dim=attention.v_head_dim,
+                seq_len=seq_len,
+            )
+
+    # The base parameter term counts one lm_head use. MTP applies that same
+    # output projection once more for every prediction depth.
+    lm_head = getattr(model, "lm_head", None)
+    if isinstance(lm_head, nn.Module):
+        active_nparams += len(model_config.mtp_layers) * sum(
+            param.numel() for param in lm_head.parameters()
+        )
+
+    return nparams, 6 * active_nparams + attention_op_flops
+
+
+class DeepSeekV3Model(MTPDecoder):
+    """
+    DeepSeek-V3 Transformer model with attention and feed-forward layers.
+    """
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(MTPDecoder.Config):
+        dim: int = 2048
+        vocab_size: int = 102400
+
+        def update_from_config(
+            self,
+            *,
+            config,
+            **kwargs,
+        ) -> None:
+            MTPDecoder.Config.update_from_config(self, config=config, **kwargs)
+
+            from torchtitan.models.deepseek_v3.sharding import (
+                set_deepseek_v3_sharding_config,
+            )
+
+            parallelism = config.parallelism
+            set_deepseek_v3_sharding_config(
+                self,
+                enable_sp=parallelism.enable_sequence_parallel,
+                enable_ep=parallelism.expert_parallel_degree > 1,
+            )
+
+        def get_nparams_and_flops(
+            self, model: nn.Module, seq_len: int
+        ) -> tuple[int, int]:
+            return get_deepseek_v3_nparams_and_flops(self, model, seq_len)

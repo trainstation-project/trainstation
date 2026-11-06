@@ -6,7 +6,10 @@
 
 _supported_experiments = frozenset(
     [
+        "graph_trainer.llama3",
+        "graph_trainer.deepseek_v3",
         "transformers_modeling_backend",
+        "torchft.llama3",
         "rl",
     ]
 )

@@ -21,10 +21,8 @@ from torchtitan.components.optimizer import (
     default_adamw,
     register_moe_load_balancing_hook,
 )
-from torchtitan.experiments.transformers_modeling_backend.grouped_router import (
-    DeepSeekV3Router,
-)
 from torchtitan.models.common.moe import MoE
+from torchtitan.models.deepseek_v3.moe import DeepSeekV3Router
 
 
 def _expert_weights(experts):

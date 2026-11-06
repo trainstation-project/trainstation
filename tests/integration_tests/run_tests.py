@@ -13,7 +13,6 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
@@ -21,14 +20,21 @@ from torchtitan.observability.logging import init_logger
 from torchtitan.trainer import Trainer
 
 from tests.integration_tests import OverrideDefinitions, validate_fake_pg_compatibility
+from tests.integration_tests.b200 import build_b200_tests_list
+from tests.integration_tests.features import build_features_test_list
+from tests.integration_tests.h100 import build_h100_tests_list
+from tests.integration_tests.models import build_model_tests_list
 
 
 logger = logging.getLogger(__name__)
 
 
-# Core suites were removed along with the in-tree models. Experiments (e.g.
-# transformers_modeling_backend) reuse ``run_tests`` with their own suites.
-_TEST_SUITES_FUNCTION: dict[str, Callable[[], list[OverrideDefinitions]]] = {}
+_TEST_SUITES_FUNCTION = {
+    "features": build_features_test_list,
+    "models": build_model_tests_list,
+    "h100": build_h100_tests_list,
+    "b200": build_b200_tests_list,
+}
 
 # Held while a test writes its captured output so concurrent tests do not
 # interleave their lines.
@@ -512,8 +518,8 @@ def main():
     )
     parser.add_argument(
         "--test_suite",
-        required=True,
-        help="Comma-separated test suites to run.",
+        default="features",
+        help="Comma-separated test suites to run: features, models, h100, b200.",
     )
     parser.add_argument(
         "--execution_mode",
@@ -565,6 +571,10 @@ def main():
         test_suites = _parse_test_suites(args.test_suite)
     except ValueError as error:
         parser.error(str(error))
+    hardware_suites = {"h100", "b200"}.intersection(test_suites)
+    if args.execution_mode == "fake_pg" and hardware_suites:
+        suites = ", ".join(sorted(hardware_suites))
+        parser.error(f"The {suites} suite(s) only support --execution_mode real_pg")
     if args.execution_mode == "fake_pg" and args.test_scope == "real_pg_required":
         parser.error("real_pg_required test scope requires --execution_mode real_pg")
     if not os.path.exists(args.output_dir):

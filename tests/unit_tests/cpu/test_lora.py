@@ -9,19 +9,102 @@ from dataclasses import dataclass
 import pytest
 import torch
 import torch.nn.functional as F
+from torch._inductor.kernel.flex.flex_cpu import check_cpu_supported
 
 from torchtitan.config.transform import (
     Float8LinearConverter,
     LinearLoRAHandler,
     LoRATransform,
+    transform_model_config_,
 )
 from torchtitan.models.common.attention import FlexInnerAttention
 from torchtitan.models.common.feed_forward import FeedForward
 from torchtitan.models.common.linear import Linear
+from torchtitan.models.llama3 import model_registry
 from torchtitan.protocols.module import Module
 
 
 LINEAR_LORA_HANDLERS = (LinearLoRAHandler(),)
+
+
+def test_lora_model_builds():
+    """LoRA debug model builds, has trainable adapters and frozen base."""
+    model_spec = model_registry("debugmodel")
+    model_spec.model = transform_model_config_(
+        model_spec.model,
+        [
+            LoRATransform(
+                handlers=LINEAR_LORA_HANDLERS,
+                rank=8,
+                alpha=16.0,
+                target_modules=["wqkv", "wo"],
+            )
+        ],
+    )
+    model = model_spec.model.build()
+    model.init_states()
+
+    lora_params = {
+        n for n, p in model.named_parameters() if "lora_a" in n or "lora_b" in n
+    }
+    frozen_linears = {n for n, p in model.named_parameters() if not p.requires_grad}
+
+    assert len(lora_params) > 0, "No LoRA parameters found"
+    assert len(frozen_linears) > 0, "No frozen parameters found"
+    lora_modules = {name.rsplit(".", 2)[0] for name in lora_params}
+    assert lora_modules == {
+        f"layers.{layer}.attention.{projection}"
+        for layer in range(6)
+        for projection in ("qkv_linear.wqkv", "wo")
+    }
+    for name in lora_params:
+        assert model.get_parameter(
+            name
+        ).requires_grad, f"LoRA param '{name}' should be trainable"
+    for name in frozen_linears:
+        assert (
+            "lora_a" not in name and "lora_b" not in name
+        ), f"Frozen param '{name}' looks like a LoRA adapter"
+    non_lora_trainable = {
+        n
+        for n, p in model.named_parameters()
+        if p.requires_grad and "lora_a" not in n and "lora_b" not in n
+    }
+    assert non_lora_trainable == set()
+
+
+@pytest.mark.skipif(
+    not check_cpu_supported(),
+    reason="Inductor's CPU flex_attention needs AVX2 and does not support macOS",
+)
+def test_lora_forward():
+    """LoRA model forward produces correct output shape."""
+    model_spec = model_registry("debugmodel")
+    model_spec.model = transform_model_config_(
+        model_spec.model,
+        [
+            LoRATransform(
+                handlers=LINEAR_LORA_HANDLERS,
+                rank=8,
+                alpha=16.0,
+                target_modules=["wqkv", "wo"],
+            )
+        ],
+    )
+    model = model_spec.model.build()
+    model.init_states()
+
+    vocab_size = model_spec.model.vocab_size
+    num_documents, seq_len = 2, 16
+    num_tokens = num_documents * seq_len
+    tokens = torch.randint(0, vocab_size, (num_tokens,))
+    positions = torch.arange(seq_len).repeat(num_documents)
+    attention_masks = model.get_attention_masks(positions)
+    # The default attention backend is FlexInnerAttention, which does not support
+    # backward on CPU; this is a forward-only shape check, so run under no_grad.
+    with torch.no_grad():
+        output = model(tokens, attention_masks=attention_masks, positions=positions)
+    assert output.shape == (num_tokens, vocab_size)
 
 
 def test_lora_targets_fused_feed_forward_projection():
@@ -200,6 +283,29 @@ def test_lora_rank_validation():
         LoRATransform(handlers=LINEAR_LORA_HANDLERS, rank=0)
     with pytest.raises(ValueError, match="rank must be positive"):
         LoRATransform(handlers=LINEAR_LORA_HANDLERS, rank=-1)
+
+
+def test_multiple_lora_transforms_conflict():
+    model_spec = model_registry("debugmodel")
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        transform_model_config_(
+            model_spec.model,
+            [
+                LoRATransform(
+                    handlers=LINEAR_LORA_HANDLERS,
+                    rank=2,
+                    alpha=4.0,
+                    target_modules=["wqkv"],
+                ),
+                LoRATransform(
+                    handlers=LINEAR_LORA_HANDLERS,
+                    rank=4,
+                    alpha=8.0,
+                    target_modules=["wo"],
+                ),
+            ],
+        )
 
 
 def test_lora_freezes_direct_params_on_composite_modules():

@@ -6,6 +6,7 @@
 
 import unittest
 from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import spmd_types as spmd
@@ -32,6 +33,7 @@ from torchtitan.components.loss import (
     IGNORE_INDEX,
 )
 from torchtitan.distributed.spmd_types import set_current_spmd_mesh
+from torchtitan.models.deepseek_v3.mtp import MTPDecoder, MTPLoss, roll_mtp_sequence
 
 
 class TestLoss(unittest.TestCase):
@@ -48,6 +50,96 @@ class TestLoss(unittest.TestCase):
 
         torch.testing.assert_close(logprobs, expected_logprobs)
         torch.testing.assert_close(entropy, expected_entropy)
+
+    def test_roll_mtp_sequence_respects_packed_document_boundaries(self):
+        tokens = torch.tensor([10, 11, 12, 20, 21, 22, 23, 24])
+        positions = torch.tensor([0, 1, 2, 0, 1, 2, 3, 4])
+
+        torch.testing.assert_close(
+            roll_mtp_sequence(tokens, shift=1, positions=positions, fill_value=0),
+            torch.tensor([11, 12, 0, 21, 22, 23, 24, 0]),
+        )
+        torch.testing.assert_close(
+            roll_mtp_sequence(tokens, shift=2, positions=positions, fill_value=0),
+            torch.tensor([12, 0, 0, 22, 23, 24, 0, 0]),
+        )
+
+    def test_mtp_preprocess_aligns_tokens_and_labels(self):
+        # Two packed documents: [A0, A1, A2, B0, B1, B2, B3, B4].
+        # TorchTitan positions reset at each document boundary.
+        tokens = torch.tensor([10, 11, 12, 20, 21, 22, 23, 24])
+        positions = torch.tensor([0, 1, 2, 0, 1, 2, 3, 4])
+        labels = torch.arange(8)
+        padding_mask = torch.tensor(
+            [False, False, False, False, False, False, True, True]
+        )
+        model = _FakeMTPDecoder(skip_lm_head=True, num_mtp_layers=2)
+        with patch(
+            "torchtitan.models.deepseek_v3.mtp.annotate_input_spmd_types",
+            side_effect=lambda _parallel_dims, batch, _input_sharding: batch,
+        ):
+            input_tokens, loss_labels, extra_kwargs = model.preprocess_inputs(
+                {
+                    "input": tokens,
+                    "labels": labels,
+                    "positions": positions,
+                    "padding_mask": padding_mask,
+                },
+                parallel_dims=SimpleNamespace(cp_enabled=False),
+                parallelism=SimpleNamespace(),
+                max_num_documents=2,
+                max_context_length=8,
+            )
+
+        assert isinstance(input_tokens, tuple)
+        assert isinstance(loss_labels, tuple)
+        torch.testing.assert_close(input_tokens[0], tokens)
+        torch.testing.assert_close(
+            input_tokens[1], torch.tensor([11, 12, 0, 21, 22, 0, 0, 0])
+        )
+        torch.testing.assert_close(
+            input_tokens[2], torch.tensor([12, 0, 0, 22, 0, 0, 0, 0])
+        )
+        torch.testing.assert_close(loss_labels[0], labels)
+        torch.testing.assert_close(
+            loss_labels[1],
+            torch.tensor(
+                [1, 2, IGNORE_INDEX, 4, 5, IGNORE_INDEX, IGNORE_INDEX, IGNORE_INDEX]
+            ),
+        )
+        torch.testing.assert_close(
+            loss_labels[2],
+            torch.tensor(
+                [
+                    2,
+                    IGNORE_INDEX,
+                    IGNORE_INDEX,
+                    5,
+                    IGNORE_INDEX,
+                    IGNORE_INDEX,
+                    IGNORE_INDEX,
+                    IGNORE_INDEX,
+                ]
+            ),
+        )
+        self.assertEqual(len(extra_kwargs["mtp_input_valid_masks"]), 2)
+        torch.testing.assert_close(
+            extra_kwargs["mtp_input_valid_masks"][0],
+            torch.tensor([True, True, False, True, True, False, False, False]),
+        )
+        torch.testing.assert_close(
+            extra_kwargs["mtp_input_valid_masks"][1],
+            torch.tensor([True, False, False, True, False, False, False, False]),
+        )
+        torch.testing.assert_close(extra_kwargs["padding_mask"], padding_mask)
+
+    def test_mtp_loss_rejects_plain_tensor(self):
+        loss_fn = MTPLoss(MTPLoss.Config(global_vocab_size=16))
+        pred = torch.zeros(1, 4, 16)
+        labels = torch.zeros(1, 4, dtype=torch.long)
+
+        with self.assertRaisesRegex(ValueError, "expects prediction and labels tuples"):
+            loss_fn(pred, labels)
 
     def test_ignore_index_equal_per_token_contribution(self):
         """Test that each valid token contributes equally to the loss.
@@ -391,6 +483,18 @@ class _AddMTPBlock(nn.Module):
         return mtp_input_embed + prev_embed * mtp_input_valid_mask.unsqueeze(-1)
 
 
+class _FakeMTPDecoder(MTPDecoder):
+    def __init__(self, *, skip_lm_head: bool, num_mtp_layers: int = 1):
+        nn.Module.__init__(self)
+        self._skip_lm_head = skip_lm_head
+        self.tok_embeddings = nn.Embedding(16, 4)
+        self.layers = nn.ModuleDict({"0": _IdentityDecoderBlock()})
+        self.norm = nn.Identity()
+        self.lm_head = nn.Linear(4, 16, bias=False)
+        self.mtp_layers = nn.ModuleList(_AddMTPBlock() for _ in range(num_mtp_layers))
+        self.config = SimpleNamespace(first_full_attention_backend=None)
+
+
 class _WeightedTwoOutputLoss(BaseLoss):
     """Two-output objective used to exercise generic chunked-loss plumbing."""
 
@@ -576,6 +680,102 @@ class TestChunkedLossWrapper(unittest.TestCase):
 
         torch.testing.assert_close(chunked_value, ref_loss)
         for actual, expected in zip(chunked_hidden, ref_hidden, strict=True):
+            torch.testing.assert_close(actual.grad, expected.grad)
+        torch.testing.assert_close(
+            model_chunked.output.weight.grad,
+            model_ref.output.weight.grad,
+        )
+
+    def test_mtp_decoder_returns_predictions(self):
+        tokens = torch.tensor([1, 2, 3, 4])
+        positions = torch.tensor([0, 1, 0, 1])
+        mtp_tokens, valid_mask = roll_mtp_sequence(
+            tokens,
+            shift=1,
+            positions=positions,
+            fill_value=0,
+            return_valid_mask=True,
+        )
+        model_inputs = (tokens, mtp_tokens)
+
+        hidden_outputs = _FakeMTPDecoder(skip_lm_head=True)(
+            model_inputs,
+            positions,
+            mtp_input_valid_masks=(valid_mask,),
+        )
+        self.assertIsInstance(hidden_outputs, tuple)
+        self.assertEqual(len(hidden_outputs), 2)
+        self.assertEqual(hidden_outputs[0].shape, (4, 4))
+        self.assertEqual(hidden_outputs[1].shape, (4, 4))
+
+        full_outputs = _FakeMTPDecoder(skip_lm_head=False)(
+            model_inputs,
+            positions,
+            mtp_input_valid_masks=(valid_mask,),
+        )
+        self.assertEqual(full_outputs[0].shape, (4, 16))
+        self.assertEqual(full_outputs[1].shape, (4, 16))
+
+    def test_chunked_mtp_matches_full_objective(self):
+        torch.manual_seed(42)
+        seq_len, dim, vocab_size, num_chunks = 8, 5, 17, 2
+        model_ref, _ = self._make_model_and_loss(dim, vocab_size, num_chunks)
+        model_chunked, _ = self._make_model_and_loss(dim, vocab_size, num_chunks)
+        model_chunked.output.load_state_dict(model_ref.output.state_dict())
+        loss_config = MTPLoss.Config(
+            mtp_scale=0.3,
+            global_vocab_size=vocab_size,
+        )
+        full_loss = MTPLoss(loss_config)
+        chunked_loss = ChunkedLossWrapper(
+            ChunkedLossWrapper.Config(
+                num_chunks=num_chunks,
+                loss_fn=loss_config,
+            )
+        )
+        chunked_loss.set_lm_head(model_chunked.output)
+
+        labels = torch.randint(0, vocab_size, (seq_len,))
+        positions = torch.tensor([0, 1, 2, 3, 0, 1, 2, 3])
+        loss_labels = (
+            labels,
+            roll_mtp_sequence(
+                labels,
+                shift=1,
+                positions=positions,
+                fill_value=IGNORE_INDEX,
+            ),
+            roll_mtp_sequence(
+                labels,
+                shift=2,
+                positions=positions,
+                fill_value=IGNORE_INDEX,
+            ),
+        )
+        hidden = tuple(torch.randn(seq_len, dim) for _ in range(3))
+        reference_hidden = tuple(
+            value.detach().clone().requires_grad_(True) for value in hidden
+        )
+        chunked_hidden = tuple(
+            value.detach().clone().requires_grad_(True) for value in hidden
+        )
+        global_valid_tokens = (labels != IGNORE_INDEX).sum()
+
+        reference_value, _ = full_loss(
+            tuple(model_ref.output(value) for value in reference_hidden),
+            loss_labels,
+            global_valid_tokens,
+        )
+        chunked_value, _ = chunked_loss(
+            chunked_hidden,
+            loss_labels,
+            global_valid_tokens,
+        )
+        reference_value.backward()
+        chunked_value.backward()
+
+        torch.testing.assert_close(chunked_value, reference_value)
+        for actual, expected in zip(chunked_hidden, reference_hidden, strict=True):
             torch.testing.assert_close(actual.grad, expected.grad)
         torch.testing.assert_close(
             model_chunked.output.weight.grad,

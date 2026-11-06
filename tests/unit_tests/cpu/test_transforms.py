@@ -10,13 +10,26 @@ import unittest
 
 import torchtitan.config.transform as transform_api
 from torchtitan.config.transform import (
+    apply_transforms,
     ContextParallelTransform,
     convert_config_type,
     ModelConfigTransform,
+    transform_model_config_,
 )
 
 from torchtitan.models.common.attention import FlexInnerAttention
 from torchtitan.models.common.cp_attention import KVAllGatherCPFlexInnerAttention
+
+
+def _llama3_cp_ready():
+    from torchtitan.models.llama3 import model_registry
+    from torchtitan.models.llama3.config_registry import llama3_debugmodel
+
+    config = llama3_debugmodel()
+    config.model_spec = model_registry("debugmodel", attn_backend="flex")
+    config.parallelism.context_parallel_degree = 2
+    config.training.max_context_length = 512
+    return config
 
 
 class _Record(ModelConfigTransform):
@@ -83,9 +96,95 @@ class TestOrdering(unittest.TestCase):
     def setUp(self):
         _Record.order = []
 
+    def test_run_after_decides_the_order_not_the_list(self):
+        config = _llama3_cp_ready()
+        config.parallelism.context_parallel_degree = 1
+        apply_transforms(config, [_Third(), _First(), _Second()])
+        self.assertEqual(_Record.order, ["_First", "_Second", "_Third"])
+
+    def test_unrelated_transforms_keep_the_declared_order(self):
+        config = _llama3_cp_ready()
+        config.parallelism.context_parallel_degree = 1
+        apply_transforms(config, [_First(), _Loose()])
+        self.assertEqual(_Record.order, ["_First", "_Loose"])
+
+    def test_rejects_a_declared_conflict(self):
+        config = _llama3_cp_ready()
+        config.parallelism.context_parallel_degree = 1
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            apply_transforms(config, [_First(), _Rival()])
+
+    def test_rejects_the_same_self_conflicting_instance_twice(self):
+        config = _llama3_cp_ready()
+        config.parallelism.context_parallel_degree = 1
+        transform = _SelfConflicting()
+
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            apply_transforms(config, [transform, transform])
+
+        self.assertEqual(_Record.order, [])
+
+
+class TestAtomicApplication(unittest.TestCase):
+    def test_a_failure_leaves_the_caller_config_untouched(self):
+        config = _llama3_cp_ready()
+        config.parallelism.context_parallel_degree = 1
+        attention = config.model_spec.model.layers[0].attention
+        before = attention.inner_attention.block_size
+
+        with self.assertRaisesRegex(ValueError, "boom"):
+            apply_transforms(config, [_Boom()])
+
+        self.assertEqual(attention.inner_attention.block_size, before)
+
+    def test_the_caller_config_is_not_the_returned_one(self):
+        config = _llama3_cp_ready()
+        result = apply_transforms(
+            config,
+            [ContextParallelTransform(inner_attention=KVAllGatherCPFlexInnerAttention)],
+        )
+        self.assertIsNot(result, config)
+        original = config.model_spec.model.layers[0].attention.inner_attention
+        self.assertNotIsInstance(original, KVAllGatherCPFlexInnerAttention.Config)
+
 
 class TestTransformModel(unittest.TestCase):
     """The primitive runs on a model config alone, with no trainer config."""
+
+    @staticmethod
+    def _spec():
+        from torchtitan.models.llama3 import model_registry
+
+        return model_registry("debugmodel", attn_backend="flex")
+
+    def test_rewrites_a_bare_model_spec(self):
+        spec = self._spec()
+        spec.model = transform_model_config_(
+            spec.model,
+            [ContextParallelTransform(inner_attention=KVAllGatherCPFlexInnerAttention)],
+        )
+        inner = spec.model.layers[0].attention.inner_attention
+        self.assertIsInstance(inner, KVAllGatherCPFlexInnerAttention.Config)
+
+    def test_does_not_validate(self):
+        """A CP kernel without a CP degree passes here and fails in the trainer.
+
+        Validation is the caller's job, so RL and ``model_registry`` can rewrite
+        a spec that no ``Trainer.Config`` owns yet.
+        """
+        spec = self._spec()
+        transform_model_config_(
+            spec.model,
+            [ContextParallelTransform(inner_attention=KVAllGatherCPFlexInnerAttention)],
+        )
+
+    def test_orders_transforms(self):
+        _Record.order = []
+        transform_model_config_(
+            self._spec().model,
+            [_Third(), _First(), _Second()],
+        )
+        self.assertEqual(_Record.order, ["_First", "_Second", "_Third"])
 
 
 class TestContextParallelTransform(unittest.TestCase):
@@ -93,9 +192,57 @@ class TestContextParallelTransform(unittest.TestCase):
         handler_cls = getattr(transform_api, "LinearLoRAHandler", None)
         self.assertIsNotNone(handler_cls, "LinearLoRAHandler is not exported")
 
+    def test_swap_keeps_the_tuning_of_the_kernel_it_replaces(self):
+        config = _llama3_cp_ready()
+        tuned = config.model_spec.model.layers[0].attention.inner_attention
+        tuned.block_size = (256, 128)
+        tuned.kernel_options = {"BACKEND": "FLASH"}
+
+        result = apply_transforms(
+            config,
+            [ContextParallelTransform(inner_attention=KVAllGatherCPFlexInnerAttention)],
+        )
+
+        swapped = result.model_spec.model.layers[0].attention.inner_attention
+        self.assertIsInstance(swapped, KVAllGatherCPFlexInnerAttention.Config)
+        self.assertEqual(swapped.block_size, (256, 128))
+        self.assertEqual(swapped.kernel_options, {"BACKEND": "FLASH"})
+
     def test_rejects_a_kernel_that_is_not_context_parallel(self):
         with self.assertRaisesRegex(ValueError, "must inherit CPInnerAttention"):
             ContextParallelTransform(inner_attention=FlexInnerAttention)
+
+    def test_lora_runs_after_context_parallelism(self):
+        transform_cls = getattr(transform_api, "LoRATransform", None)
+        self.assertIsNotNone(transform_cls, "LoRATransform is not exported")
+        handler_cls = getattr(transform_api, "LinearLoRAHandler", None)
+        self.assertIsNotNone(handler_cls, "LinearLoRAHandler is not exported")
+        config = _llama3_cp_ready()
+
+        result = apply_transforms(
+            config,
+            [
+                transform_cls(
+                    handlers=(handler_cls(),),
+                    rank=2,
+                    alpha=4.0,
+                    target_modules=["wqkv", "wo"],
+                ),
+                ContextParallelTransform(
+                    inner_attention=KVAllGatherCPFlexInnerAttention
+                ),
+            ],
+        )
+
+        inner = result.model_spec.model.layers[0].attention.inner_attention
+        self.assertIsInstance(inner, KVAllGatherCPFlexInnerAttention.Config)
+
+        model = result.model_spec.model.build()
+        trainable = {
+            name for name, param in model.named_parameters() if param.requires_grad
+        }
+        self.assertTrue(trainable)
+        self.assertTrue(all("lora_a" in name or "lora_b" in name for name in trainable))
 
 
 if __name__ == "__main__":

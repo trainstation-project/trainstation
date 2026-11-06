@@ -11,8 +11,11 @@
 import unittest
 from unittest.mock import patch
 
+import spmd_types as spmd
 import torch
 
+from torchtitan.distributed.parallel_dims import MeshAxisName
+from torchtitan.distributed.spmd_types import _per_axis_types
 from torchtitan.models.common.attention import (
     create_varlen_metadata_for_document,
     GQAttention,
@@ -112,6 +115,32 @@ class TestPackedVarlenInnerAttention(unittest.TestCase):
 
         self.assertEqual(out_TD.shape, x_TD.shape)
 
+    def test_thk_thv_sharding_uses_varlen_argument_names(self):
+        from torchtitan.models.llama3 import llama3_configs
+        from torchtitan.models.llama3.sharding import set_llama3_sharding_config
+
+        build_config, max_context_length = llama3_configs["debugmodel"]
+        model_config = build_config("varlen", seq_len=max_context_length)
+        set_llama3_sharding_config(model_config, enable_sp=False)
+
+        sharding = model_config.layers[0].attention.inner_attention.sharding_config
+        assert sharding is not None
+        self.assertEqual(
+            set(sharding.in_src_shardings or {}),
+            {"q_THK", "k_THK", "v_THV"},
+        )
+        q_layout = (sharding.in_src_shardings or {})["q_THK"]
+        k_dst_layout = (sharding.in_dst_shardings or {})["k_THK"]
+        axis_types = _per_axis_types(q_layout)
+        self.assertEqual(axis_types[MeshAxisName.DP], spmd.S(0))
+        self.assertEqual(axis_types[MeshAxisName.CP], spmd.S(0))
+        self.assertEqual(axis_types[MeshAxisName.TP], spmd.S(1))
+        self.assertEqual(_per_axis_types(k_dst_layout)[MeshAxisName.CP], spmd.S(0))
+        self.assertEqual(
+            _per_axis_types(k_dst_layout),
+            _per_axis_types((sharding.in_src_shardings or {})["k_THK"]),
+        )
+
     def test_out_transform_receives_th_lse(self):
         num_tokens, num_heads, head_dim = 5, 2, 4
         q_THK = torch.randn(num_tokens, num_heads, head_dim)
@@ -141,6 +170,28 @@ class TestPackedVarlenInnerAttention(unittest.TestCase):
             )
 
         self.assertEqual(out_THV.shape, q_THK.shape)
+
+    def test_llama_decoder_preserves_td_shape(self):
+        from torchtitan.models.llama3 import llama3_configs
+
+        build_config, max_context_length = llama3_configs["debugmodel"]
+        model = build_config("varlen", seq_len=max_context_length).build()
+        model.init_states()
+        num_tokens = 6
+        tokens_T = torch.randint(0, 2048, (num_tokens,))
+        positions_T = torch.tensor([0, 1, 0, 1, 2, 3])
+        metadata = model.get_attention_masks(positions_T)
+
+        def _identity_varlen(q_THK, k_THK, v_THV, *args, **kwargs):
+            return q_THK
+
+        with patch(
+            "torchtitan.models.common.attention._varlen_attn",
+            side_effect=_identity_varlen,
+        ):
+            logits_TV = model(tokens_T, positions_T, metadata)
+
+        self.assertEqual(logits_TV.shape, (num_tokens, 2048))
 
 
 if __name__ == "__main__":

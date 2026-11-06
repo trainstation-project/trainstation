@@ -4,4 +4,9 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-_supported_models: frozenset[str] = frozenset()
+_supported_models = frozenset(
+    [
+        "deepseek_v3",
+        "llama3",
+    ]
+)

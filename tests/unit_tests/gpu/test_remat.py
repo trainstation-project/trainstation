@@ -227,6 +227,17 @@ class TestRematRegions(unittest.TestCase):
             ):
                 config_factory()
 
+    def test_llama_attention_policy_applies_without_changing_state_dict(self):
+        from torchtitan.models.llama3 import model_registry
+
+        with torch.device("meta"):
+            model = model_registry("debugmodel").model.build()
+        state_keys = list(model.state_dict())
+
+        RegionAC.Config(save_regions=["attention.*"]).build().apply(model)
+
+        self.assertEqual(list(model.state_dict()), state_keys)
+
     def test_attention_save_regions_control_recomputation(self):
         for save_regions, expected_counts in (
             ([], (2, 2, 2)),

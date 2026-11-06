@@ -4,12 +4,10 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
 
-from torchtitan.models.common import RouterGateLinear, Sigmoid, UnaryActivationFn
 from torchtitan.models.common.moe import TokenChoiceTopKRouter
 
 # Shape suffix legend:
@@ -83,33 +81,3 @@ class DeepSeekV3Router(TokenChoiceTopKRouter):
             dim=-1,
             sorted=False,
         ).indices
-
-
-def make_deepseek_v3_router_config(
-    *,
-    dim: int,
-    num_experts: int,
-    gate_param_init: dict[str, Callable],
-    top_k: int = 1,
-    score_func: UnaryActivationFn.Config | None = None,
-    route_norm: bool = False,
-    route_scale: float = 1.0,
-    num_expert_groups: int | None = None,
-    num_limited_groups: int | None = None,
-    bias: bool = False,
-) -> DeepSeekV3Router.Config:
-    return DeepSeekV3Router.Config(
-        num_experts=num_experts,
-        gate=RouterGateLinear.Config(
-            in_features=dim,
-            out_features=num_experts,
-            bias=bias,
-            param_init=gate_param_init,
-        ),
-        top_k=top_k,
-        score_func=Sigmoid.Config() if score_func is None else score_func,
-        route_norm=route_norm,
-        route_scale=route_scale,
-        num_expert_groups=num_expert_groups,
-        num_limited_groups=num_limited_groups,
-    )

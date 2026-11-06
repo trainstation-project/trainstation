@@ -2649,6 +2649,140 @@ class TestBucketingPrefetchOrder(FSDPTest):
                 layer_ids.append(found_lid)
         return layer_ids
 
+    def _run_and_get_layer_ids(self, fsdp_reshard_after_forward: str):
+        """Run a single forward+backward step and return bucketed AG layer ids."""
+        from torchtitan.components.tokenizer import HuggingFaceTokenizer
+        from torchtitan.experiments.graph_trainer.llama3 import (
+            model_registry as llama3_model_registry,
+        )
+        from torchtitan.experiments.graph_trainer.llama3.parallelize import (
+            annotate_llama,
+        )
+        from torchtitan.experiments.graph_trainer.simple_fsdp import (
+            data_parallel,
+            MixedPrecisionPolicy,
+        )
+        from torchtitan.experiments.graph_trainer.tests._trainer_test_utils import (
+            build_minimal_trainer,
+        )
+        from torchtitan.experiments.graph_trainer.trainer import GraphTrainer
+
+        parallel_dims = ParallelDims(
+            dp_shard=-1,
+            dp_replicate=1,
+            cp=1,
+            tp=1,
+            pp=1,
+            ep=1,
+            world_size=self.world_size,
+        )
+
+        model_spec = llama3_model_registry("debugmodel")
+        model_config = model_spec.model
+        vocab_size = model_config.vocab_size
+
+        with torch.device("meta"):
+            model = model_config.build()
+
+        annotate_llama(model)
+        from torchtitan.experiments.graph_trainer.common_utils import (
+            get_simple_fsdp_mesh,
+        )
+
+        fsdp_mesh = get_simple_fsdp_mesh(parallel_dims)
+        mp_policy = MixedPrecisionPolicy(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
+        )
+        model = data_parallel(
+            model, device_mesh=fsdp_mesh, mode="fully_shard", mp_policy=mp_policy
+        )
+        model.to_empty(device="cuda")
+        with torch.no_grad():
+            model.init_states(buffer_device=None)
+        model.train()
+
+        # Use GraphTrainer's full path: trace + construct_default_graph_passes
+        trainer = build_minimal_trainer(
+            model,
+            model_config,
+            GraphTrainer,
+            tokenizer=HuggingFaceTokenizer(tokenizer_path="./tests/assets/tokenizer"),
+            fsdp_reshard_after_forward=fsdp_reshard_after_forward,
+            parallel_dims=parallel_dims,
+        )
+
+        num_tokens = self.BATCH_SIZE * self.SEQ_LEN
+        inputs = torch.randint(0, vocab_size, (num_tokens,), device="cuda")
+        labels = torch.randint(0, vocab_size, (num_tokens,), device="cuda")
+        # The dataloader supplies per-document positions, which the trainer
+        # requires to build the block-causal FlexInnerAttention mask.
+        positions = torch.arange(self.SEQ_LEN, device="cuda", dtype=torch.int32).repeat(
+            self.BATCH_SIZE
+        )
+        global_valid_tokens = torch.tensor(num_tokens, dtype=torch.float, device="cuda")
+
+        # One forward_backward_step triggers _make_fx_forward_backward_step
+        # which traces the model and applies all graph passes.
+        trainer.forward_backward_step(
+            input_dict={"input": inputs, "positions": positions, "labels": labels},
+            global_valid_tokens=global_valid_tokens,
+        )
+
+        layer_ids = self._get_bucketed_ag_layer_order(trainer._traced_step.gm)
+        self.assertGreater(len(layer_ids), 0, "No layer all_gather nodes found")
+        return layer_ids
+
+    def test_forward_allgather_prefetch_follows_layer_order(self):
+        """Without reshard-after-forward, all all_gathers are in forward and
+        must appear in non-decreasing layer order 0 → N."""
+        layer_ids = self._run_and_get_layer_ids(fsdp_reshard_after_forward="never")
+
+        for i in range(1, len(layer_ids)):
+            self.assertGreaterEqual(
+                layer_ids[i],
+                layer_ids[i - 1],
+                f"Forward all_gather prefetch order violated: "
+                f"layer {layer_ids[i]} before layer {layer_ids[i - 1]} "
+                f"(full order: {layer_ids})",
+            )
+
+    def test_allgather_prefetch_with_reshard_after_forward(self):
+        """With reshard-after-forward, backward also issues all_gathers.
+        The graph-order sequence must be forward (0 → N) then backward (N → 0)."""
+        layer_ids = self._run_and_get_layer_ids(fsdp_reshard_after_forward="always")
+
+        # Split forward (ascending) and backward (descending) at the peak.
+        peak = max(range(len(layer_ids)), key=lambda i: layer_ids[i])
+        forward_ids = layer_ids[: peak + 1]
+        backward_ids = layer_ids[peak:]
+
+        # Backward all_gathers should exist when reshard-after-forward is on.
+        self.assertGreater(
+            len(backward_ids),
+            1,
+            f"Expected backward all_gathers with reshard-after-forward, "
+            f"got order: {layer_ids}",
+        )
+
+        for i in range(1, len(forward_ids)):
+            self.assertGreaterEqual(
+                forward_ids[i],
+                forward_ids[i - 1],
+                f"Forward all_gather prefetch order violated: "
+                f"layer {forward_ids[i]} before layer {forward_ids[i - 1]} "
+                f"(full order: {layer_ids})",
+            )
+
+        for i in range(1, len(backward_ids)):
+            self.assertLessEqual(
+                backward_ids[i],
+                backward_ids[i - 1],
+                f"Backward all_gather prefetch order violated: "
+                f"layer {backward_ids[i]} after layer {backward_ids[i - 1]} "
+                f"(full order: {layer_ids})",
+            )
+
     def test_drops_assert_async_and_dead_chain(self):
         # _assert_async is side-effectful, so plain DCE keeps it (and its whole
         # le/all condition chain). The pass erases the assert, then DCE reaps the

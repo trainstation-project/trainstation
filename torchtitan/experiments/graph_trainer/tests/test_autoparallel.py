@@ -4,12 +4,14 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+from contextlib import ExitStack
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
 
-from torchtitan.config import TrainingConfig
+from torchtitan.config import ParallelismConfig, TrainingConfig
 from torchtitan.experiments.graph_trainer.configs import (
     GraphTrainerCompileConfig,
     validate_autoparallel_config,
@@ -90,6 +92,26 @@ def _training_config():
     )
 
 
+def test_autoparallel_integration_matrix():
+    from torchtitan.experiments.graph_trainer.tests.integration_tests import (
+        build_graph_trainer_autoparallel_h100_test_list,
+        build_graph_trainer_autoparallel_test_list,
+    )
+
+    suites = {
+        "default": build_graph_trainer_autoparallel_test_list(),
+        "h100": build_graph_trainer_autoparallel_h100_test_list(),
+    }
+
+    assert [test.test_name for test in suites["default"]] == [
+        "autoparallel_llama3_fsdp_tp"
+    ]
+    assert [test.test_name for test in suites["h100"]] == [
+        "autoparallel_deepseek_v3_efsdp_ep"
+    ]
+    assert all(test.ngpu == 4 for tests in suites.values() for test in tests)
+
+
 def test_autoparallel_config_validation():
     with pytest.raises(ValueError, match="only supports --compile.mode aot_fx_trace"):
         validate_autoparallel_config(
@@ -133,3 +155,92 @@ def test_autoparallel_graph_pass_selection_uses_regular_memory_policy():
     assert passes.selective_activation_remat_pass in pass_fns
     assert passes.apply_cpu_offload_pass in pass_fns
     assert passes.joint_transformer_block_bucketing_reordering_pass in pass_fns
+
+
+@pytest.mark.parametrize(
+    (
+        "model_name",
+        "inductor_compilation",
+        "fsdp_reshard_after_forward",
+        "expected_reshard_after_forward",
+    ),
+    [
+        ("llama", "regional", "always", True),
+        ("deepseek", "full", "never", False),
+    ],
+)
+def test_model_autoparallel_uses_fx_module_path_and_resolved_policy(
+    model_name,
+    inductor_compilation,
+    fsdp_reshard_after_forward,
+    expected_reshard_after_forward,
+):
+    class FakeDeepSeekV3Model(torch.nn.Module):
+        def __init__(self, config, *, mesh, compute_dtype):
+            super().__init__()
+            self.model_args = SimpleNamespace(vocab_size=16)
+
+    _FakeAutoParallelGraph.instances.clear()
+    compile_config = GraphTrainerCompileConfig(
+        enable_autoparallel=True,
+        inductor_compilation=inductor_compilation,
+    )
+    parallelism = ParallelismConfig(
+        fsdp_reshard_after_forward=fsdp_reshard_after_forward
+    )
+
+    if model_name == "llama":
+        from torchtitan.experiments.graph_trainer.llama3 import parallelize_autoparallel
+
+        model = SimpleNamespace(config=SimpleNamespace(vocab_size=16))
+        parallel_dims = _FakeParallelDims()
+        call_parallelize = parallelize_autoparallel.parallelize_autoparallel_llama
+        extra_patches = ()
+    else:
+        from torchtitan.experiments.graph_trainer.deepseek_v3 import (
+            parallelize_autoparallel,
+        )
+
+        model = SimpleNamespace(config=SimpleNamespace())
+        parallel_dims = _FakeParallelDims(sparse=True)
+        call_parallelize = parallelize_autoparallel.parallelize_autoparallel_deepseekv3
+        extra_patches = (
+            patch.object(
+                parallelize_autoparallel,
+                "_load_autoparallel_dsv3_dependency",
+                return_value=(FakeDeepSeekV3Model, lambda model: None),
+            ),
+        )
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(
+                parallelize_autoparallel, "AutoParallelGraph", _FakeAutoParallelGraph
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                parallelize_autoparallel, "apply_compile", lambda model, **_: model
+            )
+        )
+        for extra_patch in extra_patches:
+            stack.enter_context(extra_patch)
+
+        call_parallelize(
+            model,
+            parallel_dims=parallel_dims,
+            training=_training_config(),
+            parallelism=parallelism,
+            compile_config=compile_config,
+            ac_config=object(),
+            dump_folder="",
+        )
+
+    autop = _FakeAutoParallelGraph.instances[0]
+    mp_policy = autop.kwargs["mp_policy"]
+    assert mp_policy.param_dtype is torch.bfloat16
+    assert mp_policy.reduce_dtype is torch.float32
+    assert autop.kwargs["reshard_after_forward"] is expected_reshard_after_forward
+    assert autop.kwargs.get("dynamic", False) is (model_name == "deepseek")
+    assert autop.apply_kwargs["compile_config"] is compile_config
+    assert autop.used_fx_path

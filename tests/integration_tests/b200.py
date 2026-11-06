@@ -1,0 +1,21 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+import torchtitan_recipes.tests.b200 as recipes
+
+from tests.integration_tests import OverrideDefinitions
+
+
+def build_b200_tests_list() -> list[OverrideDefinitions]:
+    """Build integration tests that require B200-class hardware."""
+    return [
+        OverrideDefinitions(
+            configs=[recipes.llama3_debugmodel_mxfp8_fsdp2],
+            test_descr="MXFP8 linear with an FSDP-managed weight cache",
+            test_name="mxfp8_linear_fsdp",
+            ngpu=2,
+        ),
+    ]

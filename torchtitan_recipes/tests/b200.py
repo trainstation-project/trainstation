@@ -1,0 +1,17 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+"""Configurations for the ``b200`` integration test suite."""
+
+from torchtitan.trainer import Trainer
+
+
+def llama3_debugmodel_mxfp8_fsdp2() -> Trainer.Config:
+    from torchtitan.models.llama3.config_registry import llama3_debugmodel_mxfp8
+
+    config = llama3_debugmodel_mxfp8()
+    config.parallelism.data_parallel_shard_degree = 2
+    return config

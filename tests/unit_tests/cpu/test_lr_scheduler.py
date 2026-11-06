@@ -5,7 +5,6 @@
 # LICENSE file in the root directory of this source tree.
 
 import unittest
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import torch
@@ -13,6 +12,7 @@ from torch.optim import Adam
 
 from torchtitan.components.optimizer import OptimizersContainer
 from torchtitan.components.optimizer.lr_scheduler import LRSchedulersContainer
+from torchtitan.config import ConfigManager
 
 
 class TestLRScheduler(unittest.TestCase):
@@ -46,27 +46,40 @@ class TestLRScheduler(unittest.TestCase):
         decay_type=None,
         min_lr_factor=None,
     ):
-        # Base values match the scheduler settings these expectations were
-        # written against; arguments left as None keep the base value.
-        lr_scheduler = LRSchedulersContainer.Config(
-            warmup_steps=2,
-            decay_ratio=0.8,
-            decay_type="linear",
-            min_lr_factor=0.0,
-        )
-        if warmup_steps is not None:
-            lr_scheduler.warmup_steps = warmup_steps
-        if decay_ratio is not None:
-            lr_scheduler.decay_ratio = decay_ratio
-        if decay_type is not None:
-            lr_scheduler.decay_type = decay_type
-        if min_lr_factor is not None:
-            lr_scheduler.min_lr_factor = min_lr_factor
+        # Create a trainer config with the specified parameters
+        args = [
+            "--module",
+            "llama3",
+            "--config",
+            "llama3_debugmodel",
+            "--training.steps",
+            str(training_steps),
+        ]
 
-        return SimpleNamespace(
-            lr_scheduler=lr_scheduler,
-            training=SimpleNamespace(steps=training_steps),
+        args += (
+            ["--lr_scheduler.warmup_steps", str(warmup_steps)]
+            if warmup_steps is not None
+            else []
         )
+        args += (
+            ["--lr_scheduler.decay_ratio", str(decay_ratio)]
+            if decay_ratio is not None
+            else []
+        )
+        args += (
+            ["--lr_scheduler.decay_type", decay_type] if decay_type is not None else []
+        )
+        args += (
+            ["--lr_scheduler.min_lr_factor", str(min_lr_factor)]
+            if min_lr_factor is not None
+            else []
+        )
+
+        config_manager = ConfigManager()
+        # Create base config with parameters passed directly
+        config = config_manager.parse_args(args)
+
+        return config
 
     def test_linear_warmup_decay(self):
         """Test the linear warmup followed by linear decay schedule."""

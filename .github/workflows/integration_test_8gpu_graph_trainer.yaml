@@ -68,6 +68,13 @@ jobs:
         sudo mkdir -p "$RUNNER_TEMP/artifacts-to-be-uploaded"
         sudo chown -R $(id -u):$(id -g) "$RUNNER_TEMP/artifacts-to-be-uploaded"
 
+        python -m torchtitan.experiments.graph_trainer.tests.integration_tests --test_suite graph_trainer_default --gpu_arch_type cuda $RUNNER_TEMP/artifacts-to-be-uploaded --ngpu 8
+
+
+        # Run the numerics unit tests. Standard MoE tests run in the H100 workflow.
+        pytest torchtitan/experiments/graph_trainer/tests/test_numerics.py::TestSimpleFSDP -v
+        pytest torchtitan/experiments/graph_trainer/tests/test_numerics.py::TestGraphTrainerNumerics -v -k "dense"
+
         # Run the graph passes unit tests
         pytest torchtitan/experiments/graph_trainer/tests/test_passes.py -v
 
@@ -79,5 +86,18 @@ jobs:
 
         # Run precompile unit tests
         pytest torchtitan/experiments/graph_trainer/tests/test_precompile.py -v
+
+        # Run precompile integration tests (Llama3 only; DSv3 runs in H100 workflow)
+        python -m torchtitan.experiments.graph_trainer.tests.run_precompile_tests $RUNNER_TEMP/artifacts-to-be-uploaded/precompile --ngpu 8 --test_name aot_fx_trace_llama3_precompile_fsdp_tp
+
+        # Run bitwise deterministic and SAC peak-memory guardrail tests
+        pytest torchtitan/experiments/graph_trainer/tests/test_bitwise_deterministic.py -v
+        pytest torchtitan/experiments/graph_trainer/tests/test_sac_peak_memory.py -v
+
+        # AutoParallel depends on a separately installed package that can break
+        # on PyTorch internal API movement. Keep it last so the graph_trainer
+        # tests above still produce signal when that dependency is stale.
+        python -m torchtitan.experiments.graph_trainer.tests.integration_tests --test_suite graph_trainer_autoparallel --gpu_arch_type cuda $RUNNER_TEMP/artifacts-to-be-uploaded/autoparallel --ngpu 4
+        pytest torchtitan/experiments/graph_trainer/tests/test_numerics.py::TestGraphTrainerAutoParallelNumerics::test_llama3_aot_fx_trace_autoparallel_vs_eager -v
 
         rm -rf $RUNNER_TEMP/artifacts-to-be-uploaded/*/checkpoint

@@ -358,9 +358,11 @@ def _declared_cli_options(
     return options
 
 
-# One (module, config) entry point per in-tree model. Empty while the repo
-# ships no models; add one per model when models are added back.
-_GUARDED_CONFIGS: tuple[tuple[str, str], ...] = ()
+_GUARDED_CONFIGS = (
+    ("llama3", "llama3_debugmodel"),
+    ("llama3", "sft_debugmodel"),
+    ("deepseek_v3", "deepseek_v3_debugmodel"),
+)
 
 
 def _guarded_configs():

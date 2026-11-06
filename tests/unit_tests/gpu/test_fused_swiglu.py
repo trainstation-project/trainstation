@@ -26,6 +26,9 @@ from torchtitan.models.common.dist_gemm import (
 )
 from torchtitan.models.common.feed_forward import FeedForward
 from torchtitan.models.common.linear import Linear
+from torchtitan.models.llama3 import llama3_configs
+from torchtitan.models.llama3.model import Llama3Model
+from torchtitan.models.llama3.state_dict_adapter import Llama3StateDictAdapter
 from torchtitan.overrides.fused_swiglu import fused_swiglu, FusedSwiGLU
 
 _DIM = 16
@@ -187,6 +190,43 @@ class TestFusedSwiGLUDistGemmComposition(unittest.TestCase):
         reloaded = reload_config.build()
         reloaded.load_state_dict(state_dict)
         torch.testing.assert_close(reloaded.w13.weight, fused.w13.weight)
+
+
+class TestFusedSwiGLUHFAdapter(unittest.TestCase):
+    def test_hf_adapter_roundtrip(self):
+        """A fused-SwiGLU model interoperates with the HF state-dict adapter.
+
+        The adapter maps HF mlp.gate_proj/up_proj to the physical
+        feed_forward.w13 parameter.
+        """
+        build_config, max_context_length = llama3_configs["debugmodel"]
+        config = build_config(attn_backend="flex", seq_len=max_context_length)
+        # Apply the fused override factory directly, independent of the global
+        # override registry (which other tests may clear).
+        for layer in config.layers:
+            layer.feed_forward.activation_fn = fused_swiglu(
+                layer.feed_forward.activation_fn
+            )
+        model = Llama3Model(config)
+        model.init_states()
+        ffn = model.get_submodule("layers.0.feed_forward")
+        self.assertIsInstance(ffn, FeedForward)
+        self.assertIsInstance(ffn.activation_fn, FusedSwiGLU)
+
+        sd = model.state_dict()
+        self.assertTrue(any(k.endswith("feed_forward.w1.weight") for k in sd))
+
+        adapter = Llama3StateDictAdapter(config, hf_assets_path=None)
+        hf_sd = adapter.to_hf(sd)
+        self.assertIn("model.layers.0.mlp.gate_proj.weight", hf_sd)
+        self.assertIn("model.layers.0.mlp.up_proj.weight", hf_sd)
+
+        orig_w13 = ffn.w13.weight.detach().clone()
+        restored = adapter.from_hf(hf_sd)
+        self.assertIn("layers.0.feed_forward.w1.weight", restored)
+        self.assertIn("layers.0.feed_forward.w3.weight", restored)
+        model.load_state_dict(restored, strict=False)
+        self.assertTrue(torch.equal(ffn.w13.weight, orig_w13))
 
 
 if __name__ == "__main__":
