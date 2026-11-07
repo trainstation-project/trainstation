@@ -180,21 +180,6 @@ class DeepSeekV3TransformerBlock(TransformerBlock):
             assert config.feed_forward is not None
             self.feed_forward = config.feed_forward.build()
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        attention_masks: AttentionMasksType | None,
-        positions: torch.Tensor | None = None,
-        *,
-        padding_mask: torch.Tensor | None = None,
-    ):
-        x = x + self.attention(self.attention_norm(x), attention_masks, positions)
-        if self.moe_enabled:
-            x = x + self.moe(self.ffn_norm(x), padding_mask_T=padding_mask)
-        else:
-            x = x + self.feed_forward(self.ffn_norm(x))
-        return x
-
 
 def get_deepseek_v3_nparams_and_flops(
     model_config: MTPDecoder.Config,
