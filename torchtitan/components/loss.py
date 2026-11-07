@@ -52,6 +52,36 @@ def cross_entropy_loss(
     )
 
 
+def get_local_vocab_shard(
+    logits: torch.Tensor,
+    tp_group: dist.ProcessGroup,
+    global_vocab_size: int,
+) -> tuple[int, int]:
+    """Return ``(vocab_start, local_vocab_size)`` of this rank's vocab shard.
+
+    The vocab is chunked as ``ceil(global_vocab_size / tp_degree)`` columns per
+    rank, so only the last rank(s) may hold fewer. Raises if the local
+    ``logits[..., V_local]`` does not match that shard or the shard is empty.
+    """
+    tp_world_size = dist.get_world_size(tp_group)
+    tp_rank = dist.get_rank(tp_group)
+    chunk_size = (global_vocab_size + tp_world_size - 1) // tp_world_size
+    vocab_start = min(global_vocab_size, chunk_size * tp_rank)
+    vocab_end = min(global_vocab_size, vocab_start + chunk_size)
+    local_vocab_size = max(0, vocab_end - vocab_start)
+    if logits.shape[-1] != local_vocab_size:
+        raise ValueError(
+            "Vocab-parallel cross entropy expected local vocab size "
+            f"{local_vocab_size} for global vocab size {global_vocab_size}, "
+            f"got {logits.shape[-1]}."
+        )
+    if local_vocab_size == 0:
+        raise ValueError(
+            "Vocab-parallel cross entropy does not support empty vocab shards."
+        )
+    return vocab_start, local_vocab_size
+
+
 class _LossParallelCrossEntropy(torch.autograd.Function):
     """
     Vocab-parallel cross-entropy on local ``[T, V_local]`` logits.
@@ -107,23 +137,9 @@ class _LossParallelCrossEntropy(torch.autograd.Function):
         logits_dtype = logits.dtype
         logits = logits.float()
 
-        # Compute this rank's vocab shard bounds for the local logits.
-        tp_world_size = dist.get_world_size(tp_group)
-        tp_rank = dist.get_rank(tp_group)
-        chunk_size = (global_vocab_size + tp_world_size - 1) // tp_world_size
-        vocab_start = min(global_vocab_size, chunk_size * tp_rank)
-        vocab_end = min(global_vocab_size, vocab_start + chunk_size)
-        local_vocab_size = max(0, vocab_end - vocab_start)
-        if logits.shape[-1] != local_vocab_size:
-            raise ValueError(
-                "_LossParallelCrossEntropy expected local vocab size "
-                f"{local_vocab_size} for global vocab size {global_vocab_size}, "
-                f"got {logits.shape[-1]}."
-            )
-        if local_vocab_size == 0:
-            raise ValueError(
-                "_LossParallelCrossEntropy does not support empty vocab shards."
-            )
+        vocab_start, local_vocab_size = get_local_vocab_shard(
+            logits, tp_group, global_vocab_size
+        )
 
         torch._assert_async(
             torch.all(
