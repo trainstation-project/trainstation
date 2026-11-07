@@ -7,3 +7,5 @@
 
 
 LIBRARY_NAME = "trainstation"
+
+MAX_TRITON_BLOCK_SIZE = 65536

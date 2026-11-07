@@ -8,10 +8,8 @@
 
 from dataclasses import dataclass
 
-import torch
 from torch import nn
 
-from torchtitan.models.common.attention import AttentionMasksType
 from torchtitan.models.common.decoder import Decoder, TransformerBlock
 from torchtitan.models.utils import (
     get_nparams_and_active_nparams,
@@ -41,19 +39,7 @@ class Llama3TransformerBlock(TransformerBlock):
         self.feed_forward = config.feed_forward.build()
         self.attention_norm = config.attention_norm.build()
         self.ffn_norm = config.ffn_norm.build()
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        attention_masks: AttentionMasksType | None,
-        positions: torch.Tensor | None = None,
-        *,
-        padding_mask: torch.Tensor | None = None,
-    ):
-        del padding_mask
-        h = x + self.attention(self.attention_norm(x), attention_masks, positions)
-        out = h + self.feed_forward(self.ffn_norm(h))
-        return out
+        self.moe_enabled = False
 
 
 class Llama3Model(Decoder):

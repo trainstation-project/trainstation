@@ -17,6 +17,9 @@ add more if a new callsite needs them.
 """
 
 from dataclasses import dataclass
+from typing import overload
+
+import torch
 
 import torch.nn as nn
 
@@ -146,6 +149,29 @@ class RMSNorm(nn.RMSNorm, Module):
             eps=config.eps,
             elementwise_affine=config.elementwise_affine,
         )
+
+    @overload
+    def forward(self, x: torch.Tensor, *, residual: None = None) -> torch.Tensor:
+        ...
+
+    @overload
+    def forward(
+        self, x: torch.Tensor, *, residual: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        ...
+
+    def forward(
+        self, x: torch.Tensor, *, residual: torch.Tensor | None = None
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Return ``rmsnorm(x)``, or ``(rmsnorm(residual + x), residual + x)``.
+
+        ``residual`` is keyword-only: module sharding expects every positional
+        arg to be passed.
+        """
+        if residual is None:
+            return super().forward(x)
+        h = residual + x
+        return super().forward(h), h
 
 
 class SiLU(nn.SiLU, Module):

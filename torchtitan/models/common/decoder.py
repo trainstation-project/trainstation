@@ -48,9 +48,9 @@ class TransformerBlock(Module):
     - Attention module (from ``attention.build()``)
     - FFN or MoE (from ``feed_forward.build()`` / ``moe.build()``)
     - Two RMSNorms (``attention_norm``, ``ffn_norm``)
-    - Forward: ``x + attn(norm(x), ...); x + ffn(norm(x))``
+    - Forward: ``h = x + attn(norm(x), ...); h + ffn(norm(h))``
 
-    Children implement ``__init__`` and ``forward``.
+    Children implement ``__init__`` (setting ``moe_enabled``) and inherit ``forward``.
     """
 
     @dataclass(kw_only=True, slots=True)
@@ -60,6 +60,28 @@ class TransformerBlock(Module):
         moe: MoE.Config | None = None
         attention_norm: RMSNorm.Config
         ffn_norm: RMSNorm.Config
+
+    # built by children
+    attention: BaseAttention
+    attention_norm: RMSNorm
+    ffn_norm: RMSNorm
+    feed_forward: FeedForward
+    moe: MoE
+    moe_enabled: bool
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_masks: AttentionMasksType | None,
+        positions: torch.Tensor | None = None,
+        *,
+        padding_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        attn_out = self.attention(self.attention_norm(x), attention_masks, positions)
+        ffn_in, h = self.ffn_norm(attn_out, residual=x)  # h = x + attn_out
+        if self.moe_enabled:
+            return h + self.moe(ffn_in, padding_mask_T=padding_mask)
+        return h + self.feed_forward(ffn_in)
 
 
 class Decoder(BaseModel):
