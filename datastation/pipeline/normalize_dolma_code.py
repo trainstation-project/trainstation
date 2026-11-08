@@ -3,8 +3,7 @@
 Each row has `id` (xxh3-128 hex of `text`), `text`, `source_id` (the original Dolma
 id), plus the other Dolma columns, written to <output-dir>/outputs/main/part-*.parquet.
 
-    uv run --extra io --extra processing python pipeline/normalize_dolma.py \
-        --output-dir <output_dir> --tasks 2 --limit 1000
+    uv run python pipeline/normalize_dolma_code.py --output-dir <output_dir> --tasks 2 --limit 1000
 
 Note: eventually we will want to write this straight to object storage, but for now, just save to local disk
 """

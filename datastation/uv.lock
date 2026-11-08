@@ -10,6 +10,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "datastation",
     "datatrove",
 ]
 
@@ -1144,6 +1145,17 @@ wheels = [
 ]
 
 [[package]]
+name = "datastation"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "datatrove", extra = ["io", "processing"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "datatrove", extras = ["io", "processing"], editable = "framework" }]
+
+[[package]]
 name = "datatrove"
 version = "0.10.1"
 source = { editable = "framework" }
@@ -1402,18 +1414,18 @@ requires-dist = [
     { name = "bitsandbytes", marker = "extra == 'inference'" },
     { name = "botok", marker = "extra == 'multilingual'" },
     { name = "datasets", marker = "extra == 'io'", specifier = ">=3.1.0" },
-    { name = "datatrove", extras = ["all"], marker = "extra == 'dev'" },
-    { name = "datatrove", extras = ["cli"], marker = "extra == 'testing'" },
-    { name = "datatrove", extras = ["decont"], marker = "extra == 'testing'" },
-    { name = "datatrove", extras = ["inference"], marker = "extra == 'testing'" },
-    { name = "datatrove", extras = ["io"], marker = "extra == 'inference'" },
-    { name = "datatrove", extras = ["io"], marker = "extra == 'testing'" },
-    { name = "datatrove", extras = ["multilingual"], marker = "extra == 'testing'" },
-    { name = "datatrove", extras = ["processing"], marker = "extra == 'testing'" },
-    { name = "datatrove", extras = ["quality"], marker = "extra == 'all'" },
-    { name = "datatrove", extras = ["ray"], marker = "extra == 'testing'" },
-    { name = "datatrove", extras = ["s3"], marker = "extra == 'testing'" },
-    { name = "datatrove", extras = ["testing"], marker = "extra == 'all'" },
+    { name = "datatrove", extras = ["all"], marker = "extra == 'dev'", editable = "framework" },
+    { name = "datatrove", extras = ["cli"], marker = "extra == 'testing'", editable = "framework" },
+    { name = "datatrove", extras = ["decont"], marker = "extra == 'testing'", editable = "framework" },
+    { name = "datatrove", extras = ["inference"], marker = "extra == 'testing'", editable = "framework" },
+    { name = "datatrove", extras = ["io"], marker = "extra == 'inference'", editable = "framework" },
+    { name = "datatrove", extras = ["io"], marker = "extra == 'testing'", editable = "framework" },
+    { name = "datatrove", extras = ["multilingual"], marker = "extra == 'testing'", editable = "framework" },
+    { name = "datatrove", extras = ["processing"], marker = "extra == 'testing'", editable = "framework" },
+    { name = "datatrove", extras = ["quality"], marker = "extra == 'all'", editable = "framework" },
+    { name = "datatrove", extras = ["ray"], marker = "extra == 'testing'", editable = "framework" },
+    { name = "datatrove", extras = ["s3"], marker = "extra == 'testing'", editable = "framework" },
+    { name = "datatrove", extras = ["testing"], marker = "extra == 'all'", editable = "framework" },
     { name = "dill", specifier = ">=0.3.0" },
     { name = "fasteners", marker = "extra == 'processing'" },
     { name = "fasttext-numpy2-wheel", marker = "extra == 'processing'" },

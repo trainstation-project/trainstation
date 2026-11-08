@@ -1,4 +1,13 @@
 # uv workspace for datastation (data curation). It has its own environment and
 # lockfile, separate from trainstation's training environment.
+[project]
+name = "datastation"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["datatrove[io,processing]"]
+
+[tool.uv.sources]
+datatrove = { workspace = true }  # the fork in framework/, never PyPI
+
 [tool.uv.workspace]
 members = ["framework"]
