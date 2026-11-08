@@ -1,0 +1,5 @@
+# Local environment and tool caches
+.venv/
+.hypothesis/
+.pytest_cache/
+.ruff_cache/

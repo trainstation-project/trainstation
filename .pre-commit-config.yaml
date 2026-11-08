@@ -1,5 +1,10 @@
 exclude: 'build'
 
+# datastation/framework is a fork of datatrove (Apache-2.0, formatted with ruff).
+# The hooks that rewrite files or enforce trainstation style skip it, so it stays
+# comparable with upstream and keeps its license headers and data assets as-is.
+# The ruff hooks at the end of this file check it instead.
+
 default_language_version:
     python: python3
 
@@ -8,20 +13,25 @@ repos:
     rev: 6306a48f7dae5861702d573c9c247e4e9498e867
     hooks:
     -   id: trailing-whitespace
+        exclude: '^datastation/framework/'
     -   id: check-ast
     -   id: check-merge-conflict
     -   id: no-commit-to-branch
         args: ['--branch=main']
     -   id: check-added-large-files
         args: ['--maxkb=500']
+        # datastation's uv lockfile, and the URL blocklist that datatrove's
+        # URLFilter loads at runtime.
+        exclude: '^datastation/(uv\.lock|framework/src/datatrove/assets/url_filterblacklistsv0_3_0\.tar\.gz)$'
     -   id: end-of-file-fixer
-        exclude: '^(.*\.svg)$'
+        exclude: '^(.*\.svg|datastation/framework/.*)$'
 
 -   repo: https://github.com/Lucas-C/pre-commit-hooks
     rev: v1.5.4
     hooks:
     -   id: insert-license
         files: \.py$
+        exclude: '^datastation/framework/'
         args:
         - --license-filepath
         - assets/license_header.txt
@@ -37,11 +47,13 @@ repos:
           - flake8-pep585
           - flake8-new-union-types == 0.4.1
         args: ['--config=.flake8']
+        exclude: '^datastation/framework/'
 
 -   repo: https://github.com/omnilib/ufmt
     rev: v2.3.0
     hooks:
     -   id: ufmt
+        exclude: '^datastation/framework/'
         additional_dependencies:
           - black == 22.12.0
           - usort == 1.0.5
@@ -51,6 +63,7 @@ repos:
   hooks:
     - id: pydoclint
       args: [--config=pyproject.toml]
+      exclude: '^datastation/framework/'
 
 - repo: https://github.com/codespell-project/codespell
   rev: v2.4.1
@@ -61,6 +74,7 @@ repos:
       entry: codespell --toml pyproject.toml
       language: python
       types: [text]
+      exclude: '^datastation/framework/'
       additional_dependencies:
         - tomli
 
@@ -115,3 +129,15 @@ repos:
         - "--retry-wait-time=10"
         - "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
       types_or: [markdown, python]
+      exclude: '^datastation/framework/'
+
+# datastation/framework (datatrove fork): ruff with the [tool.ruff] config in
+# datastation/framework/pyproject.toml. Keep rev in sync with datastation/uv.lock.
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.15.11
+  hooks:
+    - id: ruff-check
+      args: [--fix]
+      files: '^datastation/framework/'
+    - id: ruff-format
+      files: '^datastation/framework/'

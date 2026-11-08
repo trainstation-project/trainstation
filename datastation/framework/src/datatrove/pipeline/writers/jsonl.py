@@ -1,0 +1,74 @@
+import base64
+from datetime import date, time
+from typing import IO, Any, Callable
+
+import numpy as np
+
+from datatrove.io import DataFolderLike
+from datatrove.pipeline.writers.disk_base import DiskWriter
+
+
+def _json_default(obj: Any) -> Any:
+    # orjson serializes datetime objects natively but refuses their subclasses,
+    # such as pandas.Timestamp (produced e.g. by ParquetReader for timestamp columns)
+    if isinstance(obj, (date, time)):
+        # pandas.NaT is also a datetime subclass; it is not equal to itself. Write it as null, not "NaT"
+        return None if obj != obj else obj.isoformat()
+    # numpy scalars, e.g. a score from a model (probs.max()). Only types with a JSON equivalent are converted
+    # (NaN/inf become null, as for Python floats): arrays, timedelta64, complex, longdouble and structured values
+    # still raise
+    if isinstance(obj, np.datetime64):
+        # keep the value's own precision (like pandas.Timestamp above); NaT is written as null
+        return None if np.isnat(obj) else np.datetime_as_string(obj)
+    if isinstance(obj, np.bool_):  # checked first so it stays a bool, not 1/0
+        return bool(obj)
+    if isinstance(obj, np.integer) and not isinstance(obj, np.timedelta64):  # timedelta64 subclasses np.integer
+        return int(obj)
+    if isinstance(obj, (np.float16, np.float32, np.float64)):  # not np.floating: longdouble has no exact JSON form
+        return float(obj)
+    raise TypeError(f"Type is not JSON serializable: {type(obj).__name__}")
+
+
+class JsonlWriter(DiskWriter):
+    """Write data to datafolder (local or remote) in JSONL format
+
+    Args:
+        output_folder: a str, tuple or DataFolder where data should be saved
+        output_filename: the filename to use when saving data, including extension. Can contain placeholders such as `${rank}` or metadata tags `${tag}`
+        compression: if any compression scheme should be used. By default, "infer" - will be guessed from the filename
+        adapter: a custom function to "adapt" the Document format to the desired output format
+        expand_metadata: save each metadata entry in a different column instead of as a dictionary
+    """
+
+    default_output_filename: str = "${rank}.jsonl"
+    name = "🐿 Jsonl"
+    _requires_dependencies = ["orjson"]
+
+    def __init__(
+        self,
+        output_folder: DataFolderLike,
+        output_filename: str = None,
+        compression: str | None = "gzip",
+        adapter: Callable = None,
+        expand_metadata: bool = False,
+        max_file_size: int = -1,  # in bytes. -1 for unlimited
+        save_media_bytes=False,
+    ):
+        super().__init__(
+            output_folder,
+            output_filename=output_filename,
+            compression=compression,
+            adapter=adapter,
+            expand_metadata=expand_metadata,
+            mode="wb",
+            max_file_size=max_file_size,
+            save_media_bytes=save_media_bytes,
+        )
+
+    def _write(self, document: dict, file_handler: IO, _filename: str):
+        import orjson
+
+        for media in document.get("media", []):
+            if media["media_bytes"] is not None:
+                media["media_bytes"] = base64.b64encode(media["media_bytes"]).decode("ascii")
+        file_handler.write(orjson.dumps(document, option=orjson.OPT_APPEND_NEWLINE, default=_json_default))

@@ -1,0 +1,4 @@
+# uv workspace for datastation (data curation). It has its own environment and
+# lockfile, separate from trainstation's training environment.
+[tool.uv.workspace]
+members = ["framework"]

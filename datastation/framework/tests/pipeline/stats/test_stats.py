@@ -1,0 +1,505 @@
+import json
+import math
+import shutil
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from datatrove.data import Document
+from datatrove.io import get_datafolder
+from datatrove.pipeline.stats import (
+    DEFAULT_TOP_K_CONFIG,
+    STATS_MERGED_NAME,
+    DocStats,
+    LangStats,
+    LineStats,
+    ParagraphStats,
+    SentenceStats,
+    StatsMerger,
+    TokenStats,
+    TopKConfig,
+    WordsContaminationStats,
+    WordStats,
+)
+from datatrove.pipeline.stats.base import BaseStats
+from datatrove.utils.stats import MetricStats, MetricStatsDict, PipelineStats, Stats, TimingStats
+from tests.utils import require_nltk, require_tldextract, require_tokenizers
+
+
+class DummyStats(BaseStats):
+    def __init__(self, output_folder, groups=None, histogram_round_digits=2, top_k_config=DEFAULT_TOP_K_CONFIG):
+        super().__init__(
+            output_folder,
+            groups_to_compute=groups,
+            histogram_round_digits=histogram_round_digits,
+            top_k_config=top_k_config,
+        )
+
+    def extract_stats(self, doc: Document):
+        return {"stat": float(doc.text)}
+
+
+DOCS = [
+    Document("1.5", "1", metadata={"url": "test1.co.uk"}),
+    Document("2", "1", metadata={"url": "test1.co.uk"}),
+    Document("1", "2", metadata={"url": "test2.cz"}),
+    Document("1", "3", metadata={"url": "test3.cz"}),
+]
+
+
+class _EmptyTokenizer:
+    def word_tokenize(self, text: str) -> list[str]:
+        return []
+
+    def sent_tokenize(self, text: str) -> list[str]:
+        return []
+
+
+@require_tldextract
+class TestEmptyDocumentStats(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp_dir = get_datafolder(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp_dir.path)
+
+    def test_empty_document_produces_finite_stats(self) -> None:
+        doc = Document("", "empty", metadata={"url": "https://example.com"})
+        empty_tokenizer = _EmptyTokenizer()
+
+        with (
+            patch("datatrove.pipeline.stats.contamination_stats.load_word_tokenizer", return_value=empty_tokenizer),
+            patch("datatrove.pipeline.stats.sentence_stats.load_word_tokenizer", return_value=empty_tokenizer),
+            patch("datatrove.pipeline.stats.word_stats.load_word_tokenizer", return_value=empty_tokenizer),
+        ):
+            stats_blocks = [
+                DocStats(self.tmp_dir),
+                LineStats(self.tmp_dir, ignore_empty_lines=True),
+                ParagraphStats(self.tmp_dir),
+                SentenceStats(self.tmp_dir),
+                WordStats(self.tmp_dir),
+                WordsContaminationStats(self.tmp_dir, ["example"]),
+            ]
+
+            for stats_block in stats_blocks:
+                with self.subTest(stats_block=stats_block.__class__.__name__):
+                    stats = stats_block.extract_stats(doc)
+                    for name, value in stats.items():
+                        expected = 1 if isinstance(stats_block, LineStats) and name == "n_lines" else 0
+                        self.assertEqual(value, expected)
+                        self.assertTrue(math.isfinite(value))
+
+    def test_empty_document_with_default_line_stats_produces_finite_stats(self) -> None:
+        doc = Document("", "empty", metadata={"url": "https://example.com"})
+
+        stats = LineStats(self.tmp_dir).extract_stats(doc)
+
+        self.assertEqual(stats["n_lines"], 1)
+        self.assertEqual(stats["line_char_duplicates"], 0.0)
+        self.assertTrue(all(math.isfinite(value) for value in stats.values()))
+
+
+@require_tldextract
+class TestSummaryStats(unittest.TestCase):
+    def setUp(self):
+        # Create a temporary directory
+        self.tmp_dir = get_datafolder(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp_dir.path)
+
+    def test_grouping(self):
+        summary_stats = DummyStats(output_folder=self.tmp_dir)
+        list(summary_stats.run(DOCS, 0, 1))
+
+        with self.tmp_dir.open("summary/stat/00000.json") as f:
+            stats = MetricStatsDict.from_dict(json.load(f))
+            self.assertEqual(stats["summary"].total, 5.5)
+
+        with self.tmp_dir.open("fqdn/stat/00000.json") as f:
+            stats = MetricStatsDict.from_dict(json.load(f))
+            self.assertEqual(stats["test1.co.uk"].total, 3.5)
+            self.assertEqual(stats["test2.cz"].total, 1)
+            self.assertEqual(stats["test3.cz"].total, 1)
+
+        with self.tmp_dir.open("suffix/stat/00000.json") as f:
+            stats = MetricStatsDict.from_dict(json.load(f))
+            self.assertEqual(stats["co.uk"].total, 3.5)
+            self.assertEqual(stats["cz"].total, 2)
+
+        with self.tmp_dir.open("histogram/stat/00000.json") as f:
+            stats = MetricStatsDict.from_dict(json.load(f))
+            self.assertEqual(stats["1.0"].total, 2)
+            self.assertEqual(stats["1.5"].total, 1)
+            self.assertEqual(stats["2.0"].total, 1)
+
+    def test_histogram_rounding(self):
+        summary_stats = DummyStats(output_folder=self.tmp_dir, histogram_round_digits=0)
+        list(summary_stats.run(DOCS, 0, 1))
+
+        with self.tmp_dir.open("histogram/stat/00000.json") as f:
+            stats = MetricStatsDict.from_dict(json.load(f))
+            self.assertEqual(stats["1.0"].total, 2)
+            self.assertEqual(stats["2.0"].total, 2)
+
+    def test_compute_top_k(self):
+        top_k_config = TopKConfig(top_k=1, top_k_groups=["fqdn"])
+        summary_stats = DummyStats(output_folder=self.tmp_dir, top_k_config=top_k_config)
+        list(summary_stats.run(DOCS, 0, 1))
+
+        with self.tmp_dir.open("fqdn/stat/00000.json") as f:
+            stats = MetricStatsDict.from_dict(json.load(f))
+            self.assertEqual(stats["test1.co.uk"].total, 3.5)
+            self.assertEqual(stats["test2.cz"].total, 0)
+
+    def test_merging_stats(self):
+        summary_stats = DummyStats(output_folder=self.tmp_dir)
+        merge_stats = StatsMerger(self.tmp_dir, self.tmp_dir)
+
+        list(summary_stats.run(DOCS[0:2], 0, 2))
+        list(summary_stats.run(DOCS[2:4], 1, 2))
+        list(merge_stats.run(DOCS, 0, 1))
+        with self.tmp_dir.open(f"summary/stat/{STATS_MERGED_NAME}") as f:
+            stats = MetricStatsDict.from_dict(json.load(f))
+            self.assertEqual(stats["summary"].total, 5.5)
+
+    def test_merging_top_k(self):
+        top_k_config = TopKConfig(top_k=1, top_k_groups=["fqdn"])
+        summary_stats = DummyStats(output_folder=self.tmp_dir)
+        merge_stats = StatsMerger(self.tmp_dir, self.tmp_dir, top_k_config=top_k_config)
+
+        list(summary_stats.run(DOCS[0:2], 0, 2))
+        list(summary_stats.run(DOCS[2:4], 1, 2))
+        list(merge_stats.run(DOCS, 0, 1))
+        with self.tmp_dir.open(f"fqdn/stat/{STATS_MERGED_NAME}") as f:
+            stats = MetricStatsDict.from_dict(json.load(f))
+            self.assertEqual(stats["test1.co.uk"].total, 3.5)
+            self.assertEqual(stats["test2.cz"].total, 0)
+
+
+@require_tldextract
+@require_tokenizers
+@require_nltk
+class TestStatsModules(unittest.TestCase):
+    def setUp(self):
+        # Create a temporary directory
+        self.tmp_dir = get_datafolder(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp_dir.path)
+
+    def load_computed_means(self, stat_names: list[str]) -> dict:
+        def load_stat_total(f) -> dict:
+            stat = MetricStatsDict.from_dict(json.load(f))
+            return {k: v.total for k, v in stat.items()}
+
+        computed_stats = {}
+        for stat in stat_names:
+            with self.tmp_dir.open(f"histogram/{stat}/00000.json") as f:
+                computed_stats[stat] = load_stat_total(f)
+        return computed_stats
+
+    def test_line_stats(self):
+        docs = [
+            Document("hello\nhow\nhow\nzyou?", "1", metadata={"url": "test.cz"}),
+            Document("test test a", "2", metadata={"url": "test.cz"}),
+            Document("* Hello", "2", metadata={"url": "test.cz"}),
+        ]
+
+        expected_line_stats = {
+            "n_lines": {"4": 1, "1": 2},
+            "avg_line_length": {"4.0": 1, "11.0": 1, "7.0": 1},
+            "short_line_ratio_chars_3": {"0.5": 1, "0.0": 2},
+            "long_line_ratio_chars_5": {"0.5": 1, "1.0": 2},
+            "bullet_point_lines_ratio": {"0.0": 2, "1.0": 1},
+            "line_duplicates": {"0.25": 1, "0.0": 2},
+            "line_char_duplicates": {"0.188": 1, "0.0": 2},
+        }
+
+        line_stats = LineStats(self.tmp_dir, max_k_chars_per_line_tresholds=[3], min_k_chars_per_line_thresholds=[5])
+        list(line_stats.run(docs))
+
+        computed_stats = self.load_computed_means(list(expected_line_stats.keys()))
+        self.assertEqual(computed_stats, expected_line_stats)
+
+    def test_doc_stats(self):
+        docs = [
+            Document("1~", "1", metadata={"url": "test.cz"}),
+            Document("Test ...", "2", metadata={"url": "test.cz"}),
+        ]
+        expected_doc_stats = {
+            "length": {"2": 1, "8": 1},
+            "white_space_ratio": {"0.125": 1, "0.0": 1},
+            "non_alpha_digit_ratio": {"0.5": 2},
+            "digit_ratio": {"0.5": 1, "0.0": 1},
+            "uppercase_ratio": {"0.125": 1, "0.0": 1},
+            "elipsis_ratio": {"0.375": 1, "0.0": 1},
+            "punctuation_ratio": {"0.5": 1, "0.375": 1},
+        }
+        doc_stats = DocStats(self.tmp_dir)
+
+        list(doc_stats.run(docs))
+        computed_stats = self.load_computed_means(list(expected_doc_stats.keys()))
+        self.assertEqual(computed_stats, expected_doc_stats)
+
+    def test_word_stats(self):
+        docs = [
+            Document("okay\nokay", "1", metadata={"url": "test.cz"}),
+            Document("test test of", "2", metadata={"url": "test.cz"}),
+            Document("Looooooooong", "3", metadata={"url": "test.cz"}),
+        ]
+
+        expected_word_stats = {
+            "n_words": {"2": 1, "3": 1, "1": 1},
+            "avg_word_length": {"3.333": 1, "4.0": 1, "12.0": 1},
+            "avg_words_per_line": {"1.0": 2, "3.0": 1},
+            "short_word_ratio_3": {"0.333": 1, "0.0": 2},
+            "long_word_ratio_7": {"0.0": 2, "1.0": 1},
+            "type_token_ratio": {"0.5": 1, "0.667": 1, "1.0": 1},
+            "uppercase_word_ratio": {"0.0": 3},
+            "capitalized_word_ratio": {"0.0": 2, "1.0": 1},
+            "stop_word_ratio": {"0.0": 2, "0.333": 1},
+        }
+        word_stats = WordStats(
+            self.tmp_dir,
+            short_word_max_chars_threshold=[3],
+            long_word_max_chars_threshold=[7],
+            groups_to_compute=["histogram"],
+        )
+        list(word_stats.run(docs))
+        computed_stats = self.load_computed_means(list(expected_word_stats.keys()))
+        self.assertEqual(computed_stats, expected_word_stats)
+
+    def test_words_contamination(self):
+        docs = [
+            Document("chat gpt loves the word delve and delve is word", "1", metadata={"url": "test.cz"}),
+            Document("chat gpt doesn't prefer any words", "2", metadata={"url": "test.cz"}),
+        ]
+
+        expected_words_contamination = {
+            "words_contamination_delve": {"0.2": 1, "0.0": 1},
+        }
+
+        contamination_stats = WordsContaminationStats(self.tmp_dir, ["delve"])
+        list(contamination_stats.run(docs))
+
+        computed_stats = self.load_computed_means(list(expected_words_contamination.keys()))
+        self.assertEqual(computed_stats, expected_words_contamination)
+
+    def test_token_counter(self):
+        docs = [
+            Document("hi how are you ?", "1", metadata={"url": "test.cz"}),
+            Document(" hi hi", "2", metadata={"url": "test.cz"}),
+        ]
+
+        expected_token_counter = {
+            "token_count": {"5": 1, "2": 1},
+        }
+
+        token_counter = TokenStats(self.tmp_dir)
+        list(token_counter.run(docs))
+
+        computed_stats = self.load_computed_means(list(expected_token_counter.keys()))
+        self.assertEqual(computed_stats, expected_token_counter)
+
+    def test_lang_stats(self):
+        docs = [
+            Document("This is pure english text", "1", metadata={"url": "test.cz"}),
+            Document("Toto je český text", "2", metadata={"url": "test.cz"}),
+        ]
+
+        expected_lang_stats = {
+            "fasttext_en": {"0.887": 1, "0.0": 1},
+        }
+
+        lang_stats = LangStats(self.tmp_dir, language="en")
+        list(lang_stats.run(docs))
+
+        computed_stats = self.load_computed_means(list(expected_lang_stats.keys()))
+        self.assertEqual(computed_stats, expected_lang_stats)
+
+    def test_paragraph_stats(self):
+        docs = [
+            Document(
+                "paragraph one\n\nparagraph two\n\nshort\n\nvery very long one", "1", metadata={"url": "test.cz"}
+            ),
+        ]
+
+        expected_paragraph_stats = {
+            "n_paragraphs": {"4": 1},
+            "avg_paragraph_length": {"12.25": 1},
+            "short_paragraph_ratio_5": {"0.25": 1},
+            "long_paragraph_ratio_15": {"0.25": 1},
+        }
+        paragraph_stats = ParagraphStats(
+            self.tmp_dir, short_paragraph_max_chars_threshold=[5], long_paragraph_max_chars_threshold=[15]
+        )
+        list(paragraph_stats.run(docs))
+
+        computed_stats = self.load_computed_means(list(expected_paragraph_stats.keys()))
+        self.assertEqual(computed_stats, expected_paragraph_stats)
+
+
+class TestMetricStats(unittest.TestCase):
+    def test_welford_variance_matches_numpy(self):
+        """Verify Welford's online algorithm produces correct variance."""
+        import numpy as np
+
+        values = [3.0, 7.0, 1.0, 9.0, 5.0, 2.0, 8.0, 4.0, 6.0, 10.0]
+        ms = MetricStats()
+        for v in values:
+            ms.update(v)
+        expected_var = float(np.var(values, ddof=1))
+        assert math.isclose(ms.variance, expected_var, rel_tol=1e-10)
+        assert math.isclose(ms.standard_deviation, math.sqrt(expected_var), rel_tol=1e-10)
+
+    def test_parallel_merge_preserves_statistics(self):
+        """Verify that combining two MetricStats via __add__ gives correct merged mean/variance."""
+        import numpy as np
+
+        all_values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        ms1 = MetricStats()
+        for v in all_values[:3]:
+            ms1.update(v)
+        ms2 = MetricStats()
+        for v in all_values[3:]:
+            ms2.update(v)
+
+        combined = ms1 + ms2
+        assert combined.total == sum(all_values)
+        assert combined.n == len(all_values)
+        assert math.isclose(combined.mean, float(np.mean(all_values)))
+        assert combined.min == 1.0
+        assert combined.max == 6.0
+        expected_var = float(np.var(all_values, ddof=1))
+        assert math.isclose(combined.variance, expected_var, rel_tol=1e-9)
+
+    def test_serialization_roundtrip_preserves_variance(self):
+        ms = MetricStats()
+        for v in [10.0, 20.0, 30.0]:
+            ms.update(v)
+        data = ms.to_dict()
+        restored = MetricStats.from_dict(data)
+        assert math.isclose(restored.total, ms.total)
+        assert restored.n == ms.n
+        assert math.isclose(restored.mean, ms.mean)
+        assert math.isclose(restored.variance, ms.variance, rel_tol=1e-9)
+
+    def test_to_dict_collapses_to_scalar_when_trivial(self):
+        """When total==0 returns 0; when only one update with value==total returns scalar."""
+        assert MetricStats().to_dict() == 0
+        ms = MetricStats()
+        ms.update(1.0)
+        assert ms.to_dict() == 1.0
+
+    def test_from_dict_scalar_reconstructs(self):
+        ms = MetricStats.from_dict(42)
+        assert ms.total == 42
+        assert ms.n == 1
+
+
+class TestMetricStatsDictUnit(unittest.TestCase):
+    def test_add_merges_overlapping_and_disjoint_keys(self):
+        msd1 = MetricStatsDict()
+        msd1["a"].update(1.0)
+        msd2 = MetricStatsDict()
+        msd2["a"].update(2.0)
+        msd2["b"].update(3.0)
+
+        combined = msd1 + msd2
+        assert combined["a"].total == 3.0
+        assert combined["b"].total == 3.0
+
+    def test_topk_returns_highest(self):
+        msd = MetricStatsDict()
+        for i in range(10):
+            msd[f"key_{i}"].update(float(i))
+        top3 = msd.topk(3)
+        totals = sorted([top3[k].total for k in top3], reverse=True)
+        assert totals == [9.0, 8.0, 7.0]
+
+    def test_serialization_roundtrip(self):
+        msd = MetricStatsDict()
+        msd["metric1"].update(10.0)
+        msd["metric2"].update(20.0)
+        data = msd.to_dict()
+        restored = MetricStatsDict.from_dict(data)
+        assert math.isclose(restored["metric1"].total, 10.0)
+        assert math.isclose(restored["metric2"].total, 20.0)
+
+
+class TestStatsUnit(unittest.TestCase):
+    def test_add_merges_metrics(self):
+        s1 = Stats("block")
+        s1["m"].update(5.0)
+        s2 = Stats("block")
+        s2["m"].update(10.0)
+        combined = s1 + s2
+        assert combined["m"].total == 15.0
+
+    def test_add_different_name_raises(self):
+        s1 = Stats("block_a")
+        s2 = Stats("block_b")
+        with self.assertRaises(AssertionError):
+            s1 + s2
+
+    def test_json_roundtrip(self):
+        s = Stats("test_block")
+        s["counter"].update(42.0)
+        s["counter"].update(10.0)
+        json_str = s.to_json()
+        restored = Stats.from_dict(json.loads(json_str))
+        assert restored.name == "test_block"
+        restored_stats = restored.stats.to_dict()
+        assert math.isclose(restored_stats["counter"]["total"], 52.0)
+
+    def test_save_to_disk(self):
+        s = Stats("test_block")
+        s["counter"].update(1.0)
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json") as f:
+            s.save_to_disk(f)
+            f.seek(0)
+            data = json.load(f)
+            assert data["name"] == "test_block"
+
+
+class TestPipelineStatsUnit(unittest.TestCase):
+    def test_add_with_empty_lhs(self):
+        """Adding to an empty PipelineStats should adopt the rhs stats."""
+        ps1 = PipelineStats()
+        s = Stats("block")
+        ps2 = PipelineStats([s])
+        combined = ps1 + ps2
+        assert len(combined.stats) == 1
+
+    def test_json_roundtrip(self):
+        s = Stats("block")
+        s["m"].update(10.0)
+        ps = PipelineStats([s])
+        json_str = ps.to_json()
+        restored = PipelineStats.from_json(json.loads(json_str))
+        assert len(restored.stats) == 1
+        assert restored.stats[0].name == "block"
+
+
+class TestTimingStatsUnit(unittest.TestCase):
+    def test_context_manager_tracks_elapsed_time(self):
+        ts = TimingStats()
+        with ts:
+            _ = sum(range(100_000))
+        assert ts.total > 0
+        assert ts.n == 1
+
+    def test_parallel_merge_tracks_global_stats(self):
+        ts1 = TimingStats()
+        ts1.update(1.0)
+        ts2 = TimingStats()
+        ts2.update(3.0)
+        combined = ts1 + ts2
+        assert combined.total == 4.0
+        assert combined.n_tasks == 2
+        assert combined.global_min == 1.0
+        assert combined.global_max == 3.0
+
+    def test_serialization_roundtrip(self):
+        ts = TimingStats()
+        ts.update(1.0)
+        ts.update(2.0)
+        data = ts.to_dict()
+        restored = TimingStats.from_dict(data)
+        assert math.isclose(restored.total, ts.total)
+        assert math.isclose(restored.global_mean, ts.global_mean)
