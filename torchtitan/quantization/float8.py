@@ -45,7 +45,7 @@ _float8_experts_cache: dict[type, type] = {}
 def _get_float8_grouped_experts_cls(parent_cls: type) -> type:
     """Get or create a Float8-quantized subclass of *parent_cls*.
 
-    Works for any ``GroupedExperts`` subclass (e.g. gpt-oss variants).
+    Works for any ``GroupedExperts`` subclass.
     The returned class has a proper ``_owner`` set by ``__init_subclass__``.
     """
     if parent_cls in _float8_experts_cache:

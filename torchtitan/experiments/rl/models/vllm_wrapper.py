@@ -13,7 +13,6 @@ TorchTitan models for vLLM.
 
 import dataclasses
 from dataclasses import dataclass
-from functools import partial
 from typing import Any
 
 import spmd_types as spmd
@@ -400,32 +399,10 @@ class VLLMModelWrapper(Module):
                 self.model.init_weights(buffer_device=None)
         self._maybe_initial_load_weights()
 
-        # Give each gpt-oss attention's vLLM backend its sink rescale.
-        # Need to do it here after parallelize + weight load so sinks are
-        # TP-sharded.
-        self._inject_attention_sinks()
-
         # Route the TP all-reduce through vLLM's custom AR (off under
         # batch-invariant mode, where its size-dependent algorithm breaks).
         if self.parallel_dims.tp_enabled and not is_in_batch_invariant_mode():
             _patch_vllm_all_reduce()
-
-    # TODO: followup with potentially adding extra kwarg ``sinks`` to vLLM attn
-    def _inject_attention_sinks(self) -> None:
-        """Give each gpt-oss attention's vLLM backend its sink-rescale hook."""
-        from torchtitan.models.gpt_oss.model import (
-            apply_attention_sink_rescale,
-            Attention,
-        )
-
-        for module in self.model.modules():
-            if not isinstance(module, Attention):
-                continue
-            sinks = module.sinks
-            local_sinks = sinks._local_tensor if isinstance(sinks, DTensor) else sinks
-            module.inner_attention.vllm_attn.impl.out_transform = partial(
-                apply_attention_sink_rescale, sinks=local_sinks
-            )
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         """vLLM required API.

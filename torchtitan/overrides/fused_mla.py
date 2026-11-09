@@ -16,7 +16,7 @@ Scope and limitations
 ---------------------
 This override is specific to TorchTitan's DeepSeek-V3 ``Attention`` module and
 its packed MLA Q/KV projection layout. It is not a generic RoPE fusion and does
-not apply to non-MLA models such as Qwen3, Qwen3.5, or GPT-OSS.
+not apply to non-MLA models such as Qwen3 or Qwen3.5.
 
 The kernels implement TorchTitan ``ComplexRoPE`` and require its complex-valued
 cache. They do not support ``CosSinRoPE`` or ``MRoPE``, whose real cos/sin cache

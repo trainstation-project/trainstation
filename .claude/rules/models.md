@@ -13,7 +13,7 @@ globs: torchtitan/models/**
 
 ## Audit All Variants
 When changing shared components (attention, normalization, MoE routing), check and
-update **all** model variants: llama3, llama4, qwen3, deepseek_v3, gpt_oss, flux,
+update **all** model variants: llama3, llama4, qwen3, deepseek_v3, flux,
 and any others present. Don't leave stale patterns in sibling models.
 
 ## Unify Across Models

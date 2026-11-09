@@ -6,7 +6,6 @@
 
 """Configurations for the ``models`` integration test suite."""
 
-from torchtitan.components.data import GrainDataLoader
 from torchtitan.config.transform import apply_transforms, ContextParallelTransform
 from torchtitan.distributed.activation_checkpoint import RegionAC, SelectiveAC
 
@@ -14,10 +13,6 @@ from torchtitan.models.common.cp_attention import KVAllGatherCPFlexInnerAttentio
 from torchtitan.models.deepseek_v3.config_registry import (
     deepseek_v3_debugmodel,
     deepseek_v3_debugmodel_mtp,
-)
-from torchtitan.models.gpt_oss.config_registry import (
-    gpt_oss_debugmodel,
-    gpt_oss_debugmodel_flex,
 )
 from torchtitan.models.llama3.config_registry import llama3_debugmodel
 from torchtitan.models.qwen3.config_registry import (
@@ -297,68 +292,6 @@ def qwen35_debugmodel_varlen_attn_fsdp2_tp2_sac() -> Trainer.Config:
     config.parallelism.tensor_parallel_degree = 2
     config.activation_checkpoint = SelectiveAC.Config()
     _set_spmd_typechecking(config, typechecking=False)
-    config.training.disable_cuda_graphs = True
-    return config
-
-
-def gpt_oss_debugmodel_fsdp4_tp2_ep4_compile() -> Trainer.Config:
-    config = gpt_oss_debugmodel(seq_len=2048)
-    _set_spmd_typechecking(config, typechecking=False)
-    config.parallelism.data_parallel_shard_degree = 4
-    config.parallelism.tensor_parallel_degree = 2
-    config.parallelism.expert_parallel_degree = 4
-    config.compile.enable = True
-    config.training.disable_cuda_graphs = True
-    return config
-
-
-def gpt_oss_debugmodel_fsdp4_tp2_ep4() -> Trainer.Config:
-    config = gpt_oss_debugmodel(seq_len=2048)
-    assert isinstance(config.dataloader, GrainDataLoader.Config)
-    config.dataloader.max_num_documents = None
-    config.parallelism.data_parallel_shard_degree = 4
-    config.parallelism.tensor_parallel_degree = 2
-    config.parallelism.expert_parallel_degree = 4
-    config.training.max_context_length = 512
-    config.training.num_tokens_per_microbatch_per_dp_rank = 512
-    config.training.steps = 10
-    config.training.disable_cuda_graphs = True
-    return config
-
-
-def gpt_oss_debugmodel_flex_fsdp2_cp2_pp2_ep4_sac() -> Trainer.Config:
-    config = gpt_oss_debugmodel_flex(seq_len=2048)
-    _set_spmd_typechecking(config, typechecking=False)
-    config.parallelism.data_parallel_shard_degree = 2
-    config.parallelism.context_parallel_degree = 2
-    config.parallelism.context_parallel_load_balancer = "ptrr"
-    config.parallelism.context_parallel_ptrr_mask_key = "basic_mask"
-    config.parallelism.pipeline_parallel_degree = 2
-    config.parallelism.num_pp_microbatches = 8
-    config.parallelism.pipeline_parallel_schedule = "Interleaved1F1B"
-    config.training.num_tokens_per_microbatch_per_dp_rank = 1024
-    config.parallelism.expert_parallel_degree = 4
-    config.activation_checkpoint = SelectiveAC.Config()
-    config.training.disable_cuda_graphs = True
-    config.training.max_context_length = 512
-    config.training.steps = 10
-    return apply_transforms(
-        config,
-        [ContextParallelTransform(inner_attention=KVAllGatherCPFlexInnerAttention)],
-    )
-
-
-def gpt_oss_debugmodel_fsdp4_pp2_ep4_sac() -> Trainer.Config:
-    config = gpt_oss_debugmodel(seq_len=2048)
-    _set_spmd_typechecking(config, typechecking=False)
-    config.training.num_tokens_per_microbatch_per_dp_rank = 1024
-    config.training.num_tokens_per_train_step = 131072
-    config.parallelism.data_parallel_shard_degree = 4
-    config.parallelism.pipeline_parallel_degree = 2
-    config.parallelism.num_pp_microbatches = 8
-    config.parallelism.pipeline_parallel_schedule = "Interleaved1F1B"
-    config.parallelism.expert_parallel_degree = 4
-    config.activation_checkpoint = SelectiveAC.Config()
     config.training.disable_cuda_graphs = True
     return config
 

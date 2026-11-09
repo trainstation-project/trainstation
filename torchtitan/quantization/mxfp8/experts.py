@@ -15,7 +15,7 @@ def _get_mxfp8_grouped_experts_cls(parent_cls: type) -> type:
     """Get or create an MXFP8-quantized subclass of *parent_cls*.
 
     Works for any experts module exposing the ``_grouped_mm`` seam (the common
-    ``GroupedExperts`` and ``GptOssGroupedExperts``). The returned class has a
+    ``GroupedExperts`` and its subclasses). The returned class has a
     proper ``_owner`` set by ``__init_subclass__``.
 
     The subclass overrides ``_grouped_mm`` to call torchao's

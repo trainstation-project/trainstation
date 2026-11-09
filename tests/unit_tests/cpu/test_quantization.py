@@ -4,6 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 import inspect
+from dataclasses import dataclass
 
 import pytest
 import spmd_types as spmd
@@ -31,7 +32,6 @@ from torchtitan.models.common.decoder_sharding import colwise_config, rowwise_co
 from torchtitan.models.common.feed_forward import FeedForward
 from torchtitan.models.common.linear import Linear
 from torchtitan.models.common.moe import GroupedExperts
-from torchtitan.models.gpt_oss.moe import GptOssGroupedExperts
 from torchtitan.quantization import Float8Linear, MXFP8Linear, NVFP4Linear
 from torchtitan.quantization.float8 import _get_float8_grouped_experts_cls
 from torchtitan.quantization.mxfp8.experts import _get_mxfp8_grouped_experts_cls
@@ -386,6 +386,14 @@ def test_nvfp4_hf_export_strips_buffers(monkeypatch):
     assert not any("_rht_sign_vector" in k for k in hf_sd)
 
 
+class _ExtraFieldGroupedExperts(GroupedExperts):
+    """GroupedExperts subclass whose Config adds a field, for subclass handling."""
+
+    @dataclass(kw_only=True, slots=True)
+    class Config(GroupedExperts.Config):
+        extra_field: float = 7.0
+
+
 def test_quantized_grouped_experts():
     """Quantized GroupedExperts: _owner, subclass handling, extra config fields."""
     # Base case
@@ -395,19 +403,19 @@ def test_quantized_grouped_experts():
     assert MXFP8GroupedExperts.Config._owner is MXFP8GroupedExperts
     assert Float8GroupedExperts.Config._owner is Float8GroupedExperts
 
-    # Subclass case (GptOssGroupedExperts has extra swiglu_limit field)
-    mxfp8_cls = _get_mxfp8_grouped_experts_cls(GptOssGroupedExperts)
-    float8_cls = _get_float8_grouped_experts_cls(GptOssGroupedExperts)
+    # Subclass case (Config carries an extra field)
+    mxfp8_cls = _get_mxfp8_grouped_experts_cls(_ExtraFieldGroupedExperts)
+    float8_cls = _get_float8_grouped_experts_cls(_ExtraFieldGroupedExperts)
 
     assert mxfp8_cls.Config._owner is mxfp8_cls
     assert float8_cls.Config._owner is float8_cls
-    assert issubclass(mxfp8_cls, GptOssGroupedExperts)
-    assert issubclass(float8_cls, GptOssGroupedExperts)
-    assert hasattr(mxfp8_cls.Config, "swiglu_limit")
-    assert hasattr(float8_cls.Config, "swiglu_limit")
+    assert issubclass(mxfp8_cls, _ExtraFieldGroupedExperts)
+    assert issubclass(float8_cls, _ExtraFieldGroupedExperts)
+    assert hasattr(mxfp8_cls.Config, "extra_field")
+    assert hasattr(float8_cls.Config, "extra_field")
 
 
-@pytest.mark.parametrize("parent_cls", [GroupedExperts, GptOssGroupedExperts])
+@pytest.mark.parametrize("parent_cls", [GroupedExperts, _ExtraFieldGroupedExperts])
 @pytest.mark.parametrize(
     "make_quantized_cls",
     [_get_mxfp8_grouped_experts_cls, _get_float8_grouped_experts_cls],
@@ -430,7 +438,7 @@ def test_grouped_mm_overrides_keep_the_seam_signature(make_quantized_cls, parent
         assert override.parameters[name].kind == parameter.kind
 
 
-@pytest.mark.parametrize("parent_cls", [GroupedExperts, GptOssGroupedExperts])
+@pytest.mark.parametrize("parent_cls", [GroupedExperts, _ExtraFieldGroupedExperts])
 def test_float8_grouped_experts_checkpoint_state_uses_plain_tensors(parent_cls):
     pytest.importorskip("torchao")
     stock = parent_cls.Config(dim=16, hidden_dim=32, num_experts=2).build()

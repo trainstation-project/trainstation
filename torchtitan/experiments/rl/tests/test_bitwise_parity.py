@@ -68,7 +68,6 @@ from torchtitan.distributed.utils import (
 )
 from torchtitan.experiments.rl.controller import Controller
 from torchtitan.experiments.rl.examples.alphabet_sort.config_registry import (
-    rl_grpo_gpt_oss_debug_varlen_batch_invariant,
     rl_grpo_qwen3_0_6b_flex_batch_invariant,
     rl_grpo_qwen3_0_6b_varlen_batch_invariant,
     rl_grpo_qwen3_5_9b_varlen_batch_invariant,
@@ -929,15 +928,6 @@ class TestBitwiseParityMoEEP(BitwiseParityTestBase):
     attn_backend = "varlen"
     min_world_size = 4
     hf_assets_env_var = "MOE_HF_ASSETS_PATH"
-
-
-class TestBitwiseParityGptOssVarlen(BitwiseParityTestBase):
-    """Bitwise parity for GPT-OSS varlen attention."""
-
-    __test__ = True
-    config_fn = staticmethod(rl_grpo_gpt_oss_debug_varlen_batch_invariant)
-    attn_backend = "varlen"
-    sync_weights_from_trainer = True
 
 
 if __name__ == "__main__":

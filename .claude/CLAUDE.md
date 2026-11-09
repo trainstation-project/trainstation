@@ -72,7 +72,7 @@ You should NEVER use `--debug.deterministic_warn_only`.
 
 6. **Audit all callsites.** When changing shared code (common model components, config
    fields, distributed utilities), check and update every callsite. This includes all
-   model variants: llama3, llama4, qwen3, deepseek_v3, gpt_oss, flux, etc.
+   model variants: llama3, llama4, qwen3, deepseek_v3, flux, etc.
 
 7. **No speculative defensive checks.** Don't add checks, casts, fallbacks, or
    conversions "just in case." Only validate explicit contracts, user-facing

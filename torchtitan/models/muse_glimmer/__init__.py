@@ -154,8 +154,8 @@ def _build_muse_glimmer_attention(
     # (scale_query_by, o_gate, per-layer window_size).
     window = _layer_window_size(layer_id, n_layers, window_pattern)
     inner_attention = get_attention_config(attn_backend)
-    # Varlen carries the per-layer sliding window as an FA3 kernel arg (mirrors
-    # gpt_oss). The flex path instead selects a window-keyed BlockMask in
+    # Varlen carries the per-layer sliding window as an FA3 kernel arg. The
+    # flex path instead selects a window-keyed BlockMask in
     # Attention.forward, so it leaves inner_attention's window at the default.
     if window is not None and isinstance(inner_attention, VarlenInnerAttention.Config):
         inner_attention = dataclasses.replace(

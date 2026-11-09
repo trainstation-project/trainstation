@@ -15,7 +15,6 @@ from torchtitan.experiments.graph_trainer.common_utils import (
 )
 from torchtitan.models.common.attention import ScaledDotProductInnerAttention
 from torchtitan.models.deepseek_v3 import deepseekv3_configs
-from torchtitan.models.gpt_oss import gptoss_configs
 from torchtitan.models.muse_glimmer import muse_glimmer_configs
 
 _HAS_ATTN_GYM = importlib.util.find_spec("attn_gym") is not None
@@ -57,18 +56,6 @@ class TestModelTDLayout(unittest.TestCase):
         out_THV = attention(q_THK, k_THK, v_THV, enable_gqa=True)
 
         self.assertEqual(out_THV.shape, q_THK.shape)
-
-    def test_gpt_oss_attention_preserves_td_shape(self):
-        build_config, max_context_length = gptoss_configs["debugmodel"]
-        config = build_config("standard", "varlen", seq_len=max_context_length)
-        attention = config.layers[0].attention.build()
-        attention.inner_attention = _AttentionOutput()
-        x_TD = torch.randn(8, config.dim)
-        positions_T = torch.arange(8)
-
-        out_TD = attention(x_TD, None, positions_T)
-
-        self.assertEqual(out_TD.shape, x_TD.shape)
 
     def test_deepseek_attention_preserves_td_shape(self):
         build_config, max_context_length = deepseekv3_configs["debugmodel"]

@@ -56,7 +56,7 @@ if [[ "${GPU_ARCH_TYPE}" == "rocm" ]]; then
 fi
 
 USE_CPP=0 PIP_EXTRA_INDEX_URL= python -m pip install --pre torchao --index-url "${INDEX_URL}"
-# GPT-OSS production configs use PyTorch's FA3 backend.
+# Varlen attention configs use PyTorch's FA3 backend.
 python -m pip install flash-attn-3 \
   --extra-index-url https://download.pytorch.org/whl/test/cu130
 
