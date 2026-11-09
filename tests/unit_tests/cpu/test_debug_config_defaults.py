@@ -45,7 +45,6 @@ from torchtitan.models.gpt_oss.config_registry import (
     gpt_oss_debugmodel,
     gpt_oss_debugmodel_flex,
 )
-from torchtitan.models.kimi_k2_7.config_registry import kimi_k2_5_debugmodel
 from torchtitan.models.llama3.config_registry import (
     llama3_debugmodel,
     llama3_debugmodel_ce_loss,
@@ -85,7 +84,6 @@ _DEBUG_CONFIG_FACTORIES: tuple[DebugConfigFactory, ...] = (
     deepseek_v4_mtp_debugmodel,
     gpt_oss_debugmodel,
     gpt_oss_debugmodel_flex,
-    kimi_k2_5_debugmodel,
     llama3_debugmodel,
     llama3_debugmodel_ce_loss,
     llama3_debugmodel_dist_gemm,

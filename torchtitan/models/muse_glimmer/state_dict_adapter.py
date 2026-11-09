@@ -13,7 +13,7 @@ HuggingFace ``MuseGlimmerForConditionalGeneration`` safetensors layout
 format (``checkpoint.last_save_in_hf`` / ``checkpoint.initial_load_in_hf``) and
 so a HF<->titan parity check is possible. Both the text decoder and the vision
 stack (encoder/adapter/projection) are mapped, matching the VLM convention used
-by ``qwen3_5`` / ``kimi_k2_7``.
+by ``qwen3_5``.
 
 This mapping was validated against the *actual* released checkpoint's
 ``model.safetensors.index.json``, its ``config.json``, and the

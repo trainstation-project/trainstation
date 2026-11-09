@@ -23,7 +23,6 @@ from torchtitan.hf_datasets.multimodal.mm_datasets import (
     MultiModalProcessor,
 )
 from torchtitan.hf_datasets.multimodal.utils.image import resize_to_navit_patch_grid
-from torchtitan.models.kimi_k2_7 import config_registry as kimi_configs
 
 # The qwen3_5 package (and qwen3_6/qwen3_8 built on it) imports its GDN layer,
 # which requires attn_gym.
@@ -122,37 +121,6 @@ def test_multimodal_processor_forwards_resize_config():
     assert captured["resize_fn"] is resize_to_navit_patch_grid
     assert captured["max_patches"] == 123
     assert captured["max_patches_per_side"] == 45
-
-
-@pytest.mark.parametrize(
-    "recipe_name",
-    [
-        "kimi_k2_5_debugmodel",
-        "kimi_vl_a3b",
-    ],
-)
-def test_kimi_multimodal_recipe_copies_unpacked_dataset(recipe_name):
-    base_dataset = MM_DATASETS[
-        "cc12m-test" if recipe_name == "kimi_k2_5_debugmodel" else "cc12m"
-    ]
-    base_processor = base_dataset.processor
-
-    config = getattr(kimi_configs, recipe_name)()
-    dataset = config.dataloader.dataset
-    collator = config.dataloader.collator
-
-    assert isinstance(dataset, SingleDatasetConfig)
-    assert dataset is not base_dataset
-    assert isinstance(dataset.processor, MultiModalProcessor.Config)
-    assert dataset.processor is not base_processor
-    assert dataset.processor.resize_fn is resize_to_navit_patch_grid
-    assert dataset.processor.max_patches == 16_384
-    assert isinstance(collator, MultiModalCollator.Config)
-    assert collator.patch_order == "raster"
-    assert (
-        MM_DATASETS["cc12m-test" if recipe_name == "kimi_k2_5_debugmodel" else "cc12m"]
-        is base_dataset
-    )
 
 
 @pytest.mark.skipif(not _HAS_ATTN_GYM, reason="qwen3_5 requires attn_gym")
