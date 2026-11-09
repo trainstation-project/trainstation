@@ -39,7 +39,7 @@ The Guiding Principles when building `torchtitan`
 * Minimal changes to the model code when applying multi-dimensional parallelism.
 * Bias towards a clean, minimal codebase while providing basic reusable / swappable components.
 
-`torchtitan` showcases PyTorch's latest distributed training features across multiple model families. Core models include Llama 3, Qwen3 / 3.5 / 3.8, DeepSeek V3 / V4, Kimi K2.7 / K3, Muse Glimmer, and Flux.
+`torchtitan` showcases PyTorch's latest distributed training features across multiple model families. Core models include Llama 3, Qwen3 / 3.5 / 3.8, DeepSeek V3 / V4, Muse Glimmer, and Flux.
 
 ## Contributing
 

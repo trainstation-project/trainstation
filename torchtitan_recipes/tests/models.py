@@ -6,7 +6,6 @@
 
 """Configurations for the ``models`` integration test suite."""
 
-from torchtitan.components.optimizer import default_adamw
 from torchtitan.config.transform import apply_transforms, ContextParallelTransform
 from torchtitan.distributed.activation_checkpoint import RegionAC, SelectiveAC
 
@@ -294,47 +293,6 @@ def qwen35_debugmodel_varlen_attn_fsdp2_tp2_sac() -> Trainer.Config:
     config.activation_checkpoint = SelectiveAC.Config()
     _set_spmd_typechecking(config, typechecking=False)
     config.training.disable_cuda_graphs = True
-    return config
-
-
-def kimi_k2_5_debugmodel_muon_fsdp2_pp2_ep2() -> Trainer.Config:
-    """One four-GPU smoke path covering PP=2, FSDP=2, and EP=2.
-
-    Each PP stage consumes its local subset of the global DistMuon
-    compute-sharding map. DistMuon rejects tensor parallel: it produces
-    _StridedShard storage.
-    """
-    from torchtitan.models.kimi_k2_7.config_registry import kimi_k2_5_debugmodel
-
-    config = kimi_k2_5_debugmodel(seq_len=512)
-    _set_spmd_typechecking(config, typechecking=False)
-    config.parallelism.pipeline_parallel_degree = 2
-    config.parallelism.pipeline_parallel_schedule = "Interleaved1F1B"
-    config.parallelism.data_parallel_shard_degree = 2
-    config.parallelism.expert_parallel_degree = 2
-    # Four microbatches match the four virtual pipeline stages.
-    config.parallelism.num_pp_microbatches = 4
-    config.training.steps = 1
-    config.training.disable_cuda_graphs = True
-    return config
-
-
-def kimi_k2_5_debugmodel_muon_fsdp8_ep8() -> Trainer.Config:
-    from torchtitan.models.kimi_k2_7.config_registry import kimi_k2_5_debugmodel
-
-    config = kimi_k2_5_debugmodel(seq_len=512)
-    config.parallelism.data_parallel_shard_degree = 8
-    config.parallelism.expert_parallel_degree = 8
-    config.training.steps = 10
-    config.training.disable_cuda_graphs = True
-    return config
-
-
-def kimi_k2_5_debugmodel_seed_checkpoint() -> Trainer.Config:
-    """Use the same Kimi model with an optimizer safe for unsharded setup."""
-    config = kimi_k2_5_debugmodel_muon_fsdp8_ep8()
-    config.optimizer = default_adamw()
-    config.optimizer.implementation = "for-loop"
     return config
 
 

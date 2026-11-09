@@ -216,7 +216,7 @@ def set_muse_glimmer_vision_sharding_config(
     encoder_cfg.ln_post.sharding_config = invariant_norm_config(include_cp_axis=True)
 
     # Per-block TP via the shared helper (norms, q/k/v/proj, fc1/fc2, and the
-    # inner-attention local SPMD region), same as qwen3_5/kimi_k2_7. ``rope_cache`` is a
+    # inner-attention local SPMD region), same as qwen3_5. ``rope_cache`` is a
     # per-image vision activation, so it flows {DP: V, CP: R, TP: I}.
     set_vision_transformer_block_sharding_config(
         encoder_cfg.block,

@@ -41,7 +41,6 @@ from torchtitan.models.deepseek_v4.config_registry import (
     deepseek_v4_debugmodel,
     deepseek_v4_mtp_debugmodel,
 )
-from torchtitan.models.kimi_k2_7.config_registry import kimi_k2_5_debugmodel
 from torchtitan.models.llama3.config_registry import (
     llama3_debugmodel,
     llama3_debugmodel_ce_loss,
@@ -79,7 +78,6 @@ _DEBUG_CONFIG_FACTORIES: tuple[DebugConfigFactory, ...] = (
     deepseek_v3_debugmodel_mxfp8,
     deepseek_v4_debugmodel,
     deepseek_v4_mtp_debugmodel,
-    kimi_k2_5_debugmodel,
     llama3_debugmodel,
     llama3_debugmodel_ce_loss,
     llama3_debugmodel_dist_gemm,

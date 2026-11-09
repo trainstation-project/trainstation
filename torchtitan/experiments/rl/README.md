@@ -30,8 +30,6 @@ for MoE models. Generator sequence parallelism was disabled.
 | DeepSeek V3 | Not supported |
 | DeepSeek V4 | Support coming soon |
 | FLUX | Not supported |
-| Kimi K2.7 | Not supported |
-| Kimi K3 | Support coming soon |
 
 ## Architecture
 

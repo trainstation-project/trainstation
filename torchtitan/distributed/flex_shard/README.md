@@ -49,22 +49,6 @@ Compute sharding is construction-time configuration. It is validated and
 frozen when the optimizer is built, but is not stored in its state dict;
 checkpoint restore must rebuild the optimizer with matching values.
 
-## TorchTitan Kimi integration
-
-The [Kimi configuration registry](../../models/kimi_k2_7/config_registry.py)
-is the first TorchTitan integration. Its shared optimizer configuration:
-
-- Selects matrix parameters from attention, dense MLPs, routed and shared
-  experts, and routers for DistMuon. Other parameters continue to use
-  AdamW.
-- Defines each selected parameter's compute layout, including per-head Muon
-  for compatible attention projections.
-- Groups layers into buckets so compute-ready work can overlap packed
-  redistribution.
-
-The configuration is shared by the Kimi-family, Kimi-VL, and Moonlight
-recipes in that registry.
-
 ## Package boundary
 
 FlexShard currently lives in TorchTitan while its API matures. We intend to

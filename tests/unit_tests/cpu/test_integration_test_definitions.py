@@ -128,10 +128,11 @@ def test_h100_tests_are_registered_in_separate_suite() -> None:
 
 def test_b200_tests_are_registered_in_separate_suite() -> None:
     assert {test.test_name for test in build_b200_tests_list()} == {
-        "kimi_k3_mm",
         "mxfp8_linear_fsdp",
     }
-    assert "kimi_k3_mm" not in {test.test_name for test in build_model_tests_list()}
+    assert "mxfp8_linear_fsdp" not in {
+        test.test_name for test in build_model_tests_list()
+    }
 
 
 def test_specialized_moe_backends_have_ep_coverage() -> None:
@@ -158,7 +159,6 @@ def test_models_select_fake_and_real_pg_cases() -> None:
     assert {
         "deepseek_v3_fsdp+ep",
         "qwen3_moe_fsdp+tp+cp+ep_param_groups",
-        "kimi_k2_5_muon_fsdp+ep",
         "muse_glimmer_text_fsdp",
         "muse_glimmer_mm_fsdp+tp+sp",
     } <= fake_pg_model_tests
