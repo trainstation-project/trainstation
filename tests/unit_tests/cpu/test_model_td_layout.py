@@ -15,7 +15,6 @@ from torchtitan.experiments.graph_trainer.common_utils import (
 )
 from torchtitan.models.common.attention import ScaledDotProductInnerAttention
 from torchtitan.models.deepseek_v3 import deepseekv3_configs
-from torchtitan.models.muse_glimmer import muse_glimmer_configs
 
 _HAS_ATTN_GYM = importlib.util.find_spec("attn_gym") is not None
 if _HAS_ATTN_GYM:
@@ -66,19 +65,6 @@ class TestModelTDLayout(unittest.TestCase):
         positions_T = torch.arange(8)
 
         out_TD = attention(x_TD, None, positions_T)
-
-        self.assertEqual(out_TD.shape, x_TD.shape)
-
-    def test_muse_attention_preserves_td_shape(self):
-        build_config, max_context_length = muse_glimmer_configs["debugmodel"]
-        config = build_config("varlen", seq_len=max_context_length)
-        attention = config.layers[0].attention.build()
-        attention.inner_attention = _AttentionOutput()
-        x_TD = torch.randn(8, config.dim)
-        positions_T = torch.arange(8)
-        attention_masks = {"swa_128": None}
-
-        out_TD = attention(x_TD, attention_masks, positions_T)
 
         self.assertEqual(out_TD.shape, x_TD.shape)
 

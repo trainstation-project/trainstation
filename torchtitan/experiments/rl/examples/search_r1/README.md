@@ -59,12 +59,12 @@ subdirectory named after the repo, which is the path in `hf_assets_path`:
 
 ```bash
 python scripts/download_hf_assets.py \
-  --repo_id meta-models/Muse-Glimmer-30B \
+  --repo_id Qwen/Qwen3-1.7B \
   --local_dir torchtitan/experiments/rl/example_checkpoint \
   --all
 ```
 
-Swap `--repo_id` for the model your config selects (e.g. `Qwen/Qwen3-1.7B`).
+Swap `--repo_id` for the model your config selects (e.g. `Qwen/Qwen3-8B`).
 
 ## Run
 

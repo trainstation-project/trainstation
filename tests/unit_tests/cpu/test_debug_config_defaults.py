@@ -16,9 +16,6 @@ from torchtitan.experiments.graph_trainer.deepseek_v3.config_registry import (
 from torchtitan.experiments.graph_trainer.llama3.config_registry import (
     graph_trainer_llama3_debugmodel,
 )
-from torchtitan.experiments.graph_trainer.muse_glimmer.config_registry import (
-    graph_trainer_muse_glimmer_debugmodel,
-)
 from torchtitan.experiments.graph_trainer.qwen3.config_registry import (
     graph_trainer_qwen3_debugmodel,
     graph_trainer_qwen3_debugmodel_moe,
@@ -53,10 +50,6 @@ from torchtitan.models.llama3.config_registry import (
     llama3_debugmodel_varlen_attn,
     sft_debugmodel,
 )
-from torchtitan.models.muse_glimmer.config_registry import (
-    muse_glimmer_debugmodel,
-    muse_glimmer_debugmodel_mm,
-)
 from torchtitan.models.qwen3.config_registry import (
     qwen3_debugmodel,
     qwen3_debugmodel_first_85_pct_layers_nvfp4,
@@ -88,8 +81,6 @@ _DEBUG_CONFIG_FACTORIES: tuple[DebugConfigFactory, ...] = (
     llama3_debugmodel_nvfp4,
     llama3_debugmodel_varlen_attn,
     sft_debugmodel,
-    muse_glimmer_debugmodel,
-    muse_glimmer_debugmodel_mm,
     qwen3_debugmodel,
     qwen3_debugmodel_first_85_pct_layers_nvfp4,
     qwen3_debugmodel_flex_flash,
@@ -151,7 +142,6 @@ def test_debug_config_default_seq_len(config_factory: DebugConfigFactory) -> Non
     (
         graph_trainer_deepseek_v3_debugmodel,
         graph_trainer_llama3_debugmodel,
-        graph_trainer_muse_glimmer_debugmodel,
         graph_trainer_qwen3_debugmodel,
         graph_trainer_qwen3_debugmodel_moe,
     ),

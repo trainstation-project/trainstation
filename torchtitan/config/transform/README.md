@@ -11,7 +11,7 @@ optional, and users may build recipes with their own utilities.
 Set all training options first. Then call `apply_transforms` once.
 
 ```python
-config = muse_glimmer_30b()
+config = llama3_8b()
 config.parallelism.context_parallel_degree = 8
 
 config = apply_transforms(

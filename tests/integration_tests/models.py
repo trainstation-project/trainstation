@@ -174,27 +174,4 @@ def build_model_tests_list() -> list[OverrideDefinitions]:
             skip_rocm_test=True,
             use_real_pg=True,
         ),
-        # Integration Test Cases for Muse Glimmer
-        OverrideDefinitions(
-            configs=[recipes.muse_glimmer_debugmodel_fsdp8],
-            test_descr="Muse Glimmer text FSDP",
-            test_name="muse_glimmer_text_fsdp",
-            ngpu=8,
-            golden_numerics_path=(
-                "tests/assets/losses/{execution_mode}/{gpu_arch}/muse_glimmer.txt"
-            ),
-        ),
-        OverrideDefinitions(
-            configs=[recipes.muse_glimmer_debugmodel_mm_fsdp2_tp2],
-            test_descr="Muse Glimmer multimodal FSDP+TP+SP",
-            test_name="muse_glimmer_mm_fsdp+tp+sp",
-            ngpu=4,
-        ),
-        OverrideDefinitions(
-            configs=[recipes.muse_glimmer_debugmodel_mm_tp2_cp2_pp2],
-            test_descr="Muse Glimmer multimodal TP+CP+PP+SP",
-            test_name="muse_glimmer_mm_tp+cp+pp+sp",
-            ngpu=8,
-            use_real_pg=True,
-        ),
     ]

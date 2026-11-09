@@ -117,17 +117,12 @@ class TestQKVLinearCheckpointInterop(unittest.TestCase):
         """HF adapter works with QKVLinear's hook-produced wq/wk/wv keys."""
         from torchtitan.models.llama3 import llama3_configs
         from torchtitan.models.llama3.state_dict_adapter import Llama3StateDictAdapter
-        from torchtitan.models.muse_glimmer import muse_glimmer_configs
-        from torchtitan.models.muse_glimmer.state_dict_adapter import (
-            MuseGlimmerStateDictAdapter,
-        )
         from torchtitan.models.qwen3 import qwen3_configs
         from torchtitan.models.qwen3.state_dict_adapter import Qwen3StateDictAdapter
 
         for config_name, configs, adapter_cls in (
             ("llama3", llama3_configs, Llama3StateDictAdapter),
             ("qwen3", qwen3_configs, Qwen3StateDictAdapter),
-            ("muse_glimmer", muse_glimmer_configs, MuseGlimmerStateDictAdapter),
         ):
             with self.subTest(model=config_name):
                 build_config, max_context_length = configs["debugmodel"]

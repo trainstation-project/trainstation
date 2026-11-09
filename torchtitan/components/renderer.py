@@ -21,8 +21,7 @@ from torchtitan.config import Configurable
 class RendererConfig(Configurable.Config):
     """Base config of a renderer; `build` returns a `renderers.Renderer` on TorchTitan's tokenizer.
 
-    Subclasses: `RenderersConfigAdapter` for a renderer from the `renderers` library, and
-    in-tree renderers such as `MuseGlimmerRendererConfig`.
+    Subclasses: `RenderersConfigAdapter` for a renderer from the `renderers` library.
     """
 
     # pyrefly: ignore[bad-override]
