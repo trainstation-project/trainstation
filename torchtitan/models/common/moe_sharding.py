@@ -338,7 +338,7 @@ def set_moe_sharding_config(
     ``Shard(1)`` for colwise, ``Shard(2)`` for rowwise, ``Replicate()`` for
     replicated bias. The shared ``GroupedExperts`` (qwen3, deepseek_v3)
     passes ``{"w1_EFD": Shard(1), "w2_EDF": Shard(2), "w3_EFD": Shard(1)}``;
-    ``GptOssGroupedExperts`` passes its mlp1/mlp2 layout.
+    subclasses with different parameter names pass their own layout.
 
     Args:
         moe_cfg: The ``MoE.Config`` instance to populate.

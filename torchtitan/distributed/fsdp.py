@@ -194,7 +194,7 @@ def apply_fsdp_to_decoder(
     Apply data parallelism (via FSDP2) to a decoder-style transformer model.
 
     Shared by all dense and MoE decoders (llama3, qwen3, deepseek_v3,
-    gpt_oss, qwen3_vl, ...). The MoE handling is a strict superset of the dense
+    qwen3_vl, ...). The MoE handling is a strict superset of the dense
     case: a dense model leaves ``ep_degree=1`` / ``edp_mesh=None`` and has no
     ``moe_enabled`` blocks, so every transformer block is sharded as a single
     FSDP unit and the expert-parallel prefetching below is skipped.

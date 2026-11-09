@@ -8,7 +8,6 @@
 import torchtitan_recipes.tests.models as recipes
 
 from torchtitan.models.deepseek_v3.config_registry import deepseek_v3_debugmodel
-from torchtitan.models.gpt_oss.config_registry import gpt_oss_debugmodel_flex
 from torchtitan.models.llama3.config_registry import llama3_debugmodel
 from torchtitan.models.qwen3.config_registry import qwen3_debugmodel_moe_param_groups
 
@@ -173,38 +172,6 @@ def build_model_tests_list() -> list[OverrideDefinitions]:
             test_name="qwen3_5_fsdp+tp+varlen_attn+per_op_sac",
             ngpu=4,
             skip_rocm_test=True,
-            use_real_pg=True,
-        ),
-        # Integration Test Cases for gpt-oss
-        OverrideDefinitions(
-            configs=[recipes.gpt_oss_debugmodel_fsdp4_tp2_ep4_compile],
-            test_descr="Gpt-oss FSDP+TP+EP+compile",
-            test_name="gpt_oss_fsdp+tp+ep+compile",
-            ngpu=8,
-        ),
-        OverrideDefinitions(
-            configs=[recipes.gpt_oss_debugmodel_fsdp4_tp2_ep4],
-            test_descr="GPT-OSS FSDP+TP+EP",
-            test_name="gpt_oss_fsdp+tp+ep",
-            ngpu=8,
-            golden_numerics_path=(
-                "tests/assets/losses/{execution_mode}/{gpu_arch}/gpt_oss.txt"
-            ),
-        ),
-        OverrideDefinitions(
-            configs=[recipes.gpt_oss_debugmodel_flex_fsdp2_cp2_pp2_ep4_sac],
-            test_descr="GPT-OSS PP+FSDP+CP+EP+SACOP",
-            test_name="gpt_oss_pp+fsdp+cp+ep+sacop",
-            ngpu=8,
-            golden_numerics_path="tests/assets/losses/real_pg/{gpu_arch}/gpt_oss_pp.txt",
-            loss_compare_seed_config=gpt_oss_debugmodel_flex,
-            use_real_pg=True,
-        ),
-        OverrideDefinitions(
-            configs=[recipes.gpt_oss_debugmodel_fsdp4_pp2_ep4_sac],
-            test_descr="Gpt-oss PP+FSDP+EP+SACOP with VarlenInnerAttention",
-            test_name="gpt_oss_pp+fsdp+ep+sacop",
-            ngpu=8,
             use_real_pg=True,
         ),
         # Integration Test Cases for Kimi K2.7

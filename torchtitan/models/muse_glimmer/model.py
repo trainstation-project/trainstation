@@ -96,8 +96,8 @@ class Attention(GQAttention):
         def sliding_window_size(self) -> int | None:
             # Alias: the vLLM generator wrapper reads ``sliding_window_size`` to
             # configure per-layer paged-attention windows; the flex path uses
-            # ``window_size``. Keep both in sync via this alias (mirrors gpt_oss's
-            # field name without renaming the flex-path usages).
+            # ``window_size``. Keep both in sync via this alias instead of
+            # renaming the flex-path usages.
             return self.window_size
 
     def __init__(self, config: Config):
@@ -132,7 +132,7 @@ class Attention(GQAttention):
         # Only flex passes a window-keyed dict of BlockMasks to index into. Varlen
         # passes a single VarlenMetadata shared by every layer (each layer's window is
         # a kernel arg, baked in at build time), so it goes straight through to the
-        # kernel (mirrors gpt_oss).
+        # kernel.
         if isinstance(attention_masks, dict):
             attention_masks = attention_masks[_window_mask_key(self.window_size)]
 

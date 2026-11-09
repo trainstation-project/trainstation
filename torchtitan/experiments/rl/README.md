@@ -27,7 +27,6 @@ for MoE models. Generator sequence parallelism was disabled.
 | Muse Glimmer | ✅ Supported |
 | Qwen 3 | ✅ Supported |
 | Qwen 3.5/3.6/3.8 | ✅ Supported (text only) |
-| GPT-OSS | ✅ Supported |
 | DeepSeek V3 | Not supported |
 | DeepSeek V4 | Support coming soon |
 | FLUX | Not supported |

@@ -91,36 +91,6 @@ def build_rl_test_list() -> list[OverrideDefinitions]:
             ngpu=8,
         ),
         OverrideDefinitions(
-            [
-                [
-                    "--module alphabet_sort",
-                    "--config rl_grpo_gpt_oss_debug_varlen",
-                    "--async-loop.num-training-steps 5",
-                    "--hf_assets_path tests/assets/tokenizer",
-                    "--trainer.parallelism.tensor_parallel_degree 4",
-                    "--trainer.parallelism.expert_parallel_degree 4",
-                    "--trainer.parallelism.data_parallel_shard_degree 1",
-                    "--generator.parallelism.tensor_parallel_degree 4",
-                    "--generator.parallelism.expert_parallel_degree 4",
-                    "--generator.parallelism.data_parallel_degree 1",
-                    "--async-loop.num-samples-per-prompt 2",
-                    "--trainer.training.max_context_length 1024",
-                    "--trainer.training.num_tokens_per_microbatch_per_dp_rank 2048",
-                    "--generator.sampling.max_tokens 256",
-                    "--trainer.debug.no_batch_invariant",
-                    "--generator.debug.no_batch_invariant",
-                    "--trainer.checkpoint.no-enable",  # use random-init weights
-                    "--generator.checkpoint.no-enable",  # use random-init weights
-                    "--compile.no-enable",
-                    "--generator.cudagraph.no-enable",
-                    "--metrics.no-enable-wandb",
-                ],
-            ],
-            "RL GRPO GPT-OSS MoE varlen TP=4 EP=4",
-            "rl_grpo_moe_debug_tp4_ep4",
-            ngpu=8,
-        ),
-        OverrideDefinitions(
             # Two runs sharing the same dump_folder, with different parallelism
             # to exercise resharding on resume:
             #   run 1: trainer DP=2 (TP=1) + 2 generators (TP=2); train 2 steps,

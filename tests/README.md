@@ -102,7 +102,6 @@ and uses its fixed initialization path.
 | Llama 3 SFT | FSDP 2 |
 | DeepSeek V3 | FSDP 8, EP 8 |
 | DeepSeek V4 | FSDP 2 x TP 2, EP 2 (Real-PG only) |
-| GPT-OSS | FSDP 4 x TP 2, EP 4 |
 | Qwen3 | FSDP 2 x TP 2 x CP 2, EP 8 |
 | Muse Glimmer text | FSDP 8 |
 | Qwen3.5 MoE multimodal | FSDP 4 x TP 2, EP 4 |
@@ -121,7 +120,6 @@ Additional A10G Real-PG-only cases exercise CP and pipeline communication:
 | --- | --- |
 | DeepSeek V3 | FSDP 2 x CP 2 x PP 2, EP 4, Interleaved1F1B |
 | Llama 3 | FSDP 2 x TP 2 x PP 2, 1F1B |
-| GPT-OSS | FSDP 2 x CP 2 x PP 2, EP 4, Interleaved1F1B |
 | Kimi K2.7 DistMuon | FSDP 2 x PP 2, EP 2, Interleaved1F1B |
 
 On pull requests, the Fake-PG lane and the `real_pg_required` Real-PG scope

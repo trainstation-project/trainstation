@@ -60,7 +60,7 @@ same accumulation order. Three groups of fixes make that hold.
 the generator runs the same model inside vLLM, whose fused kernels must be routed
 back to the trainer's ops:
 
-- **Attention (Varlen / Flex / GPT-OSS):** the generator must run the same
+- **Attention (Varlen / Flex):** the generator must run the same
   attention kernel as the trainer for whichever backend the config uses.
   - *Varlen* (Qwen3, the default): the generator runs torchtitan's own
     `VarlenInnerAttention` through vLLM's `CUSTOM` backend -- the same FA3 varlen
@@ -72,13 +72,6 @@ back to the trainer's ops:
     `BLOCK_M = BLOCK_N = 16` and `BACKEND = "TRITON"` on every `FlexInnerAttention`
     layer, so both sides use the same Triton tile size and avoid the
     `flex_decode` kernel.
-  - *GPT-OSS* (varlen + per-layer sliding window + attention sinks): the same
-    `CUSTOM` varlen path and `num_splits=1` as Varlen, with the sliding-window
-    size baked into each layer's `VarlenInnerAttention` config (identical on both
-    sides). The attention sinks are a post-softmax rescale
-    (`apply_attention_sink_rescale`, `sigmoid(lse - sinks)`); the vLLM wrapper's
-    `_inject_attention_sinks` installs that same rescale as the generator
-    attention's `out_transform`, so the sink math matches the trainer.
 - **`force_logprobs_fn_for_batch_invariance`:** vLLM's v2 GPU sampler computes
   per-token logprobs with a fused Triton kernel that inlines
   `log(softmax(logits))` and never calls PyTorch ops. Replaced with the trainer's
