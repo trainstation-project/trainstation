@@ -24,7 +24,6 @@ for MoE models. Generator sequence parallelism was disabled.
 | Model | RL support |
 |---|---|
 | Llama 3 | ✅ Supported |
-| Muse Glimmer | ✅ Supported |
 | Qwen 3 | ✅ Supported |
 | Qwen 3.5/3.6/3.8 | ✅ Supported (text only) |
 | DeepSeek V3 | Not supported |

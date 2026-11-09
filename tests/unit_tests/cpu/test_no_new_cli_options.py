@@ -368,7 +368,6 @@ _GUARDED_CONFIGS = (
     ("qwen3_6", "qwen36_debugmodel_moe"),
     ("qwen3_8", "qwen38_debugmodel_moe"),
     ("flux", "flux_debugmodel"),
-    ("muse_glimmer", "muse_glimmer_debugmodel_mm"),
 )
 
 

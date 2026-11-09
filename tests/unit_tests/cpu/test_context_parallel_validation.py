@@ -190,7 +190,6 @@ class TestShippedCpRecipes(unittest.TestCase):
     """Validate every shipped CP recipe after construction."""
 
     _MODULES = (
-        "torchtitan_recipes.muse_glimmer",
         "torchtitan_recipes.tests.models",
         "torchtitan_recipes.tests.features",
         "torchtitan_recipes.tests.h100",

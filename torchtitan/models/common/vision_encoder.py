@@ -185,7 +185,7 @@ class VisionTransformerBlock(Module):
 
     @dataclass(kw_only=True, slots=True)
     class Config(Module.Config):
-        # MoonViT normalizes with RMSNorm; Qwen3.5 and Muse Glimmer use LayerNorm.
+        # MoonViT normalizes with RMSNorm; Qwen3.5 uses LayerNorm.
         norm1: LayerNorm.Config | RMSNorm.Config
         norm2: LayerNorm.Config | RMSNorm.Config
         attn: VisionAttention.Config
