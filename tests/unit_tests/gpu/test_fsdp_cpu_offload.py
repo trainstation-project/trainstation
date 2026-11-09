@@ -43,7 +43,7 @@ class _Block(nn.Module):
 class _TinyVLM(nn.Module):
     """The module shape ``apply_fsdp_to_decoder`` reads, plus a vision encoder.
 
-    Mirrors how the VLMs (qwen3_5, kimi_k2_7, kimi_k3, muse_glimmer) compose the
+    Mirrors how the VLMs (qwen3_5, muse_glimmer) compose the
     two helpers: the encoder is sharded first as one unit, then the decoder walks
     the embedding / blocks / head and finally shards the root.
     """

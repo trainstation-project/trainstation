@@ -24,11 +24,6 @@ from torchtitan.models.common.multimodal import (
 )
 from torchtitan.models.common.nn_modules import LayerNorm
 from torchtitan.models.common.vision_encoder import create_block_diagonal_mask
-from torchtitan.models.kimi_k2_7.vision_encoder import (
-    _compute_2d_rope_cache as _compute_kimi_2d_rope_cache,
-    _compute_learned_pos_embeds as _compute_kimi_learned_pos_embeds,
-    _tpool_patch_merger,
-)
 
 _HAS_ATTN_GYM = importlib.util.find_spec("attn_gym") is not None
 if _HAS_ATTN_GYM:
@@ -208,28 +203,6 @@ class TestPackedVision(unittest.TestCase):
         merged_MK = merger(x_TD)
 
         torch.testing.assert_close(merged_MK, x_TD.view(3, 8))
-
-    def test_kimi_position_embeddings_are_packed(self) -> None:
-        grids = [[1, 2, 2], [2, 2, 2]]
-        learned_pos = _compute_kimi_learned_pos_embeds(
-            torch.randn(2, 2, 4), grids, interpolation_mode="bicubic"
-        )
-        rope_cache = _compute_kimi_2d_rope_cache(torch.randn(2, 2), grids, head_dim=8)
-
-        self.assertEqual(learned_pos.shape, (12, 4))
-        self.assertEqual(rope_cache.shape, (12, 1, 4))
-
-    def test_kimi_temporal_pool_and_spatial_merge_are_packed(self) -> None:
-        hidden_TD = torch.arange(12, dtype=torch.float32).view(12, 1)
-
-        merged_MK = _tpool_patch_merger(
-            hidden_TD,
-            grids=[[1, 2, 2], [2, 2, 2]],
-            merge_kernel_size=(2, 2),
-        )
-
-        expected_MK = torch.tensor([[0.0, 1.0, 2.0, 3.0], [6.0, 7.0, 8.0, 9.0]])
-        torch.testing.assert_close(merged_MK, expected_MK)
 
     def test_scatter_vision_embeds_uses_packed_layout(self) -> None:
         inputs_TD = torch.zeros(5, 2)

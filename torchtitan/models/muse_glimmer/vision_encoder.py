@@ -64,7 +64,7 @@ def reorder_patch_vector(
     layout to Muse Glimmer's ``(pt, c, ph, pw)`` ``conv1_linear`` layout.
 
     Why this exists: the shared multimodal collator (``vision_to_patches``,
-    reused by qwen3_5/kimi_k2_7) emits patch vectors channel-first as
+    reused by qwen3_5) emits patch vectors channel-first as
     ``(c, pt, ph, pw)``. Muse Glimmer's ``conv1_linear`` was defined with the
     temporal axis first, ``(pt, c, ph, pw)`` -- matching the pretrained
     ``conv1`` weight layout -- so we swap the c/pt axes here
