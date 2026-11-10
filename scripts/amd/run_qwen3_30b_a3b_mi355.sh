@@ -23,7 +23,8 @@
 #     CPU sync, and on 8 GPUs plain FSDP (EP=1) was fastest in our sweep
 #     (EP=1: ~8.3k tok/s/GPU, EP=8: ~7.9k, EP=2: ~6.4k, EP=4: ~5.7k at
 #     seq 4096, 16k tokens/microbatch, compile on, no activation checkpointing).
-#   - Without activation checkpointing peak memory is ~185 GiB of 288 GiB.
+#   - Global batch size is the main MFU lever: 16k tok/GPU, no AC -> ~9% MFU;
+#     128k tok/GPU, selective AC (default) -> ~22% MFU, 221 GiB peak memory.
 
 set -ex
 
@@ -32,9 +33,9 @@ cd "$(dirname "$0")/../.."
 NGPU=${NGPU:-8}
 EP=${EP:-1}
 SEQ_LEN=${SEQ_LEN:-4096}
-TOKENS_PER_MICROBATCH=${TOKENS_PER_MICROBATCH:-16384}
+TOKENS_PER_MICROBATCH=${TOKENS_PER_MICROBATCH:-131072}
 STEPS=${STEPS:-300}
-AC=${AC:-none}  # none | selective | full
+AC=${AC:-selective}  # none | selective | full
 
 # ROCm / RCCL settings carried over from AMD-AGI/torchtitan-amd launch scripts.
 export GPU_MAX_HW_QUEUES=${GPU_MAX_HW_QUEUES:-2}

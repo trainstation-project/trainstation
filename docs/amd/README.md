@@ -7,8 +7,9 @@ top-8, ~3B active params) on C4.
 
 - torch `2.16.0.dev20261109+rocm10.0`, torchao nightly (same index as ROCm CI)
 - 8x MI355X (288 GiB each), single node
-- FSDP over 8 GPUs (EP=1), `torch.compile`, no activation checkpointing,
-  CUDA graphs disabled, seq len 4096, 16k tokens per microbatch per GPU
+- FSDP over 8 GPUs (EP=1), `torch.compile`, selective activation
+  checkpointing, CUDA graphs disabled, seq len 4096, 128k tokens per
+  microbatch per GPU
 
 ```bash
 pip install --pre torch torchao --index-url https://download.pytorch.org/whl/nightly/rocm10.0
@@ -20,16 +21,19 @@ python scripts/amd/plot_train_metrics.py train.log --num-gpus 8 \
     --out-dir docs/amd/figures --title "Qwen3-30B-A3B, 8x MI355X"
 ```
 
-## Results (300 steps)
+## Results (300 steps, 128k tokens/GPU, selective AC)
 
-Steady state (steps 11-300): **9.3% MFU**, **~8.3k tokens/s/GPU**,
-**~5.7B tokens/day** on 8 GPUs. Peak memory 174 GiB/GPU. Loss 12.36 -> 5.51.
+Steady state (steps 11-300): **22.2% MFU**, **~19.9k tokens/s/GPU**,
+**~13.8B tokens/day** on 8 GPUs. Peak memory 221 GiB/GPU. Loss 12.3 -> 4.63.
 
-![MFU vs step](figures/mfu_vs_step.png)
-![Tokens/day vs step](figures/tokens_per_day_vs_step.png)
+![MFU vs step](figures/mfu_vs_step_mb128k.png)
+![Tokens/day vs step](figures/tokens_per_day_vs_step_mb128k.png)
 
-Isolated single-step dips (e.g. step ~111) are one-off stalls; the run
-otherwise holds a flat ~9% MFU.
+MFU peaks at ~25% around step 20 and settles to ~22% by step ~100 (the same
+early decay appears at every batch size; not yet root-caused).
+
+Original run (16k tokens/GPU, no AC): 9.3% MFU, ~5.7B tokens/day
+([MFU](figures/mfu_vs_step.png), [tokens/day](figures/tokens_per_day_vs_step.png)).
 
 ## Global batch size is the main lever
 
@@ -45,6 +49,7 @@ seq 4096, mean of steps 6-15 or 11-30):
 | 32k | none | 278 GiB | 16,336 | 18.2% |
 | 64k | full | 91 GiB | 18,190 | 20.3% |
 | 64k | selective | 143 GiB | 19,721 | 22.0% |
+| 128k | selective | 221 GiB | 23,422 | 26.2% (steps 11-30) |
 
 Gradient accumulation barely helps because FSDP still all-gathers and
 reduce-scatters on every microbatch (only HSDP skips the sync); only a larger
