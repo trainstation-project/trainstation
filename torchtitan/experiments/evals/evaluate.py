@@ -6,21 +6,8 @@
 
 """Evaluate the DCP checkpoints of a training run with lm-evaluation-harness.
 
-Runs as its own job next to (never inside) the training job. It reads the
-training config with the same CLI as ``torchtitan.train``, loads each
-``step-N`` checkpoint natively (no HF conversion), and writes lm-eval results
-to ``<dump_folder>/evals/step-N/<task>.json``, one file per task.
-
-Usage::
-
-    torchrun --nproc_per_node=8 -m torchtitan.experiments.evals.evaluate \\
-        --tasks trainstation_quick [--steps 1000 2000 | --watch] \\
-        -- --module llama3 --config llama3_8b [training overrides]
-
-Without ``--steps``, every completed checkpoint is evaluated on the tasks it
-has no results for yet. ``--watch`` keeps polling for new checkpoints until
-the final training step has been evaluated, or until no new checkpoint has
-appeared for ``--max-idle-hours``.
+Runs next to the training job and writes ``<dump_folder>/evals/step-N/<task>.json``;
+see README.md for usage.
 """
 
 import dataclasses
@@ -46,7 +33,6 @@ from torchtitan.config import ConfigManager
 from torchtitan.distributed import ParallelDims
 from torchtitan.experiments.evals.checkpoint import (
     build_model,
-    checkpoint_folder,
     eval_parallelism,
     list_checkpoint_steps,
     load_weights,
@@ -66,6 +52,8 @@ TASKS_DIR = os.path.join(os.path.dirname(__file__), "tasks")
 # Results unit suffix for scores on the questions that do not overlap the
 # training data (see --decontaminate).
 CLEAN_SUFFIX = ".clean"
+# Written by contamination.py into the results folder.
+CONTAMINATION_REPORT = "contamination.json"
 
 
 @dataclass(kw_only=True, slots=True)
@@ -127,18 +115,19 @@ class EvalConfig:
             )
 
 
-def parse_args(argv: list[str]) -> tuple[EvalConfig, list[str]]:
+def parse_args(config_cls: type[T], argv: list[str]) -> tuple[T, list[str]]:
+    """Options before '--' into ``config_cls``; the training arguments after it."""
     if "--" not in argv:
         raise ValueError(
             "Pass the training config after '--', e.g. "
             "'-- --module llama3 --config llama3_8b'."
         )
     split = argv.index("--")
-    return tyro.cli(EvalConfig, args=argv[:split]), argv[split + 1 :]
+    return tyro.cli(config_cls, args=argv[:split]), argv[split + 1 :]
 
 
 def init_distributed() -> torch.device:
-    device = torch.device(utils.device_type, int(os.environ.get("LOCAL_RANK", 0)))
+    device = utils.get_local_device()
     utils.device_module.set_device(device)
     # gloo carries lm-eval's object gathers; nccl carries tensor collectives.
     dist.init_process_group(backend=f"cpu:gloo,{device.type}:nccl")
@@ -150,10 +139,6 @@ def broadcast_from_rank0(fn: Callable[[], T]) -> T:
     value = [fn() if dist.get_rank() == 0 else None]
     dist.broadcast_object_list(value, src=0)
     return value[0]  # pyrefly: ignore [bad-return]
-
-
-def suite_name(tasks: list[str]) -> str:
-    return "+".join(tasks)
 
 
 def expand_tasks(names: list[str], task_manager: TaskManager) -> list[str]:
@@ -255,6 +240,14 @@ def clean_samples(report: dict[str, Any], unit: str) -> dict[str, list[int]]:
     return samples
 
 
+def write_json(path: str, record: dict[str, Any], indent: int = 2) -> None:
+    """Write then rename, so a reader never sees a partial file."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(f"{path}.tmp", "w") as f:
+        json.dump(record, f, indent=indent, default=str)
+    os.replace(f"{path}.tmp", path)
+
+
 def write_on_rank0(path: str, record: dict[str, Any]) -> None:
     """Write ``record`` on rank 0; every rank raises if the write fails.
 
@@ -264,11 +257,7 @@ def write_on_rank0(path: str, record: dict[str, Any]) -> None:
     error = None
     if dist.get_rank() == 0:
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            # Write then rename so pending_work() never sees a partial file.
-            with open(f"{path}.tmp", "w") as f:
-                json.dump(record, f, indent=2, default=str)
-            os.replace(f"{path}.tmp", path)
+            write_json(path, record)
         except OSError as e:
             error = f"{type(e).__name__}: {e}"
     error = broadcast_from_rank0(lambda: error)
@@ -310,10 +299,10 @@ def evaluate_step(
             assert contamination is not None
             samples = clean_samples(contamination, base)
             excluded = {
-                name: contamination["tasks"][name]["num_docs"] - len(ids)
-                for name, ids in samples.items()
+                name: len(contamination["tasks"][name]["contaminated"])
+                for name in samples
             }
-        if samples is not None and not all(samples.values()):
+        if clean and not all(samples.values()):
             # lm-eval evaluates every question of a task with no sample ids,
             # so a task whose questions all overlap has to be skipped.
             logger.warning(f"Skipping {task}: every question of a subtask overlaps.")
@@ -345,9 +334,7 @@ def evaluate_step(
                 "lm_eval_version": lm_eval.__version__,
                 "eval_seconds": time.perf_counter() - start,
                 "results": results["results"],
-                "groups": results.get("groups", {}),
-                "n-shot": results.get("n-shot", {}),
-                "versions": results.get("versions", {}),
+                **{k: results.get(k, {}) for k in ("groups", "n-shot", "versions")},
             }
             (clean_results if clean else all_results).update(results["results"])
         path = results_path(output_folder, step, task)
@@ -358,11 +345,11 @@ def evaluate_step(
 
 def main() -> None:
     init_logger()
-    args, train_args = parse_args(sys.argv[1:])
+    args, train_args = parse_args(EvalConfig, sys.argv[1:])
     config = ConfigManager().parse_args(train_args)
     device = init_distributed()
 
-    ckpt_folder = checkpoint_folder(config)
+    ckpt_folder = os.path.join(config.dump_folder, config.checkpoint.folder)
     output_folder = args.output_folder or os.path.join(config.dump_folder, "evals")
     max_context_length = config.training.max_context_length
 
@@ -386,7 +373,7 @@ def main() -> None:
         max_context_length=max_context_length,
         num_tokens_per_batch=args.num_tokens_per_batch
         or max(16384, max_context_length),
-        max_num_documents=getattr(config.dataloader, "max_num_documents", None),
+        max_num_documents=config.dataloader.max_num_documents,
         device=device,
     )
     task_manager = TaskManager(include_path=TASKS_DIR)
@@ -397,7 +384,7 @@ def main() -> None:
     if args.decontaminate:
         contamination = load_contamination_report(
             args.contamination_report
-            or os.path.join(output_folder, "contamination.json"),
+            or os.path.join(output_folder, CONTAMINATION_REPORT),
             tasks,
         )
         tasks = tasks + [task + CLEAN_SUFFIX for task in tasks]
@@ -405,7 +392,7 @@ def main() -> None:
     if args.wandb and dist.get_rank() == 0:
         wandb_logger = EvalWandBLogger(
             output_folder=output_folder,
-            suite=suite_name(args.tasks),
+            suite="+".join(args.tasks),
             config={"eval": dataclasses.asdict(args), "train_args": train_args},
         )
 
@@ -426,22 +413,20 @@ def main() -> None:
                     contamination=contamination,
                 )
                 if wandb_logger is not None:
-                    wandb_logger.log(
-                        step, {"results": results}, {"results": clean_results}
-                    )
+                    wandb_logger.log(step, results, clean_results)
             if work:
                 last_work = time.monotonic()
             if not args.watch:
                 break
-            final_done = broadcast_from_rank0(
-                lambda: not missing_tasks(output_folder, config.training.steps, tasks)
+            # Decided on rank 0 so all ranks stop together.
+            final_done, idle = broadcast_from_rank0(
+                lambda: (
+                    not missing_tasks(output_folder, config.training.steps, tasks),
+                    time.monotonic() - last_work > args.max_idle_hours * 3600,
+                )
             )
             if final_done:
                 break
-            # Decided on rank 0 so all ranks stop together.
-            idle = broadcast_from_rank0(
-                lambda: time.monotonic() - last_work > args.max_idle_hours * 3600
-            )
             if idle:
                 logger.warning(
                     f"No new checkpoint for {args.max_idle_hours} hours and step "

@@ -27,11 +27,6 @@ logger = logging.getLogger(__name__)
 _STEP_DIR = re.compile(r"^step-(\d+)$")
 
 
-def checkpoint_folder(config: Trainer.Config) -> str:
-    """Folder the training job writes ``step-N`` checkpoints into."""
-    return os.path.join(config.dump_folder, config.checkpoint.folder)
-
-
 def list_checkpoint_steps(folder: str) -> list[int]:
     """Steps of the completed checkpoints in ``folder``, ascending.
 

@@ -4,14 +4,9 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Log eval results to W&B next to the training run.
+"""Log eval results to W&B in a run of their own, next to the training run.
 
-Uses the same environment variables as the training job's W&B logger
-(``WANDB_TEAM``, ``WANDB_PROJECT``, ``WANDB_RUN_NAME``, ``WANDB_RUN_GROUP``).
-Results go to a separate run, so the two jobs never write to one run
-concurrently. To group it with the training run, set the same
-``WANDB_RUN_GROUP`` for both jobs; without it the training run has no group
-and the eval run's group is the run name.
+Reads the training logger's environment variables; see README.md.
 """
 
 import hashlib
@@ -20,18 +15,18 @@ import os
 from typing import Any
 
 
-def flatten_results(record: dict[str, Any], prefix: str = "eval") -> dict[str, float]:
+def flatten_results(results: dict[str, Any], prefix: str = "eval") -> dict[str, float]:
     """``{"<prefix>/<task>/<metric>": value}`` for every numeric lm-eval metric.
 
-    lm-eval keys metrics as ``"<metric>,<filter>"``; the filter is dropped when
-    it is ``none``. Standard errors are kept as ``<metric>_stderr``.
+    ``results`` is lm-eval's ``results`` dict. Metrics are keyed as
+    ``"<metric>,<filter>"``; the filter is dropped when it is ``none``.
+    Standard errors are kept as ``<metric>_stderr``.
     """
     metrics = {}
-    for task, task_metrics in record["results"].items():
+    for task, task_metrics in results.items():
         for key, value in task_metrics.items():
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                continue
-            if "," not in key or (isinstance(value, float) and math.isnan(value)):
+            numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
+            if not numeric or "," not in key or math.isnan(value):
                 continue
             metric, filter_name = key.split(",", 1)
             name = metric if filter_name == "none" else f"{metric}_{filter_name}"
@@ -49,7 +44,6 @@ class EvalWandBLogger:
     def __init__(self, *, output_folder: str, suite: str, config: dict[str, Any]):
         import wandb
 
-        self.wandb = wandb
         base_name = os.getenv("WANDB_RUN_NAME") or os.path.basename(
             os.path.dirname(os.path.abspath(output_folder))
         )
@@ -73,16 +67,11 @@ class EvalWandBLogger:
         self.run.define_metric("eval_clean/*", step_metric="train_step")
 
     def log(
-        self,
-        step: int,
-        record: dict[str, Any],
-        clean_record: dict[str, Any] | None = None,
+        self, step: int, results: dict[str, Any], clean_results: dict[str, Any]
     ) -> None:
-        """Log ``record`` under eval/ and, if given, clean-subset results under
-        eval_clean/."""
-        metrics = flatten_results(record)
-        if clean_record:
-            metrics.update(flatten_results(clean_record, prefix="eval_clean"))
+        """Log ``results`` under eval/ and clean-subset results under eval_clean/."""
+        metrics = flatten_results(results)
+        metrics.update(flatten_results(clean_results, prefix="eval_clean"))
         self.run.log({"train_step": step, **metrics})
 
     def close(self) -> None:

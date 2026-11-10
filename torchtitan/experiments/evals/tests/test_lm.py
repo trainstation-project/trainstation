@@ -49,6 +49,17 @@ DOCUMENTS = [
 ]
 
 
+def _pair_requests():
+    return [Instance("loglikelihood", {}, pair, i) for i, pair in enumerate(PAIRS)]
+
+
+def _rolling_requests():
+    return [
+        Instance("loglikelihood_rolling", {}, (doc,), i)
+        for i, doc in enumerate(DOCUMENTS)
+    ]
+
+
 @pytest.fixture(scope="module", autouse=True)
 def process_group():
     with tempfile.TemporaryDirectory() as tmp:
@@ -128,11 +139,10 @@ def _encode_pair(tokenizer, context: str, continuation: str):
 
 
 def test_loglikelihood_matches_reference(model, tokenizer):
-    lm = _make_lm(model, tokenizer)
-    requests = [
-        Instance("loglikelihood", {}, pair, idx) for idx, pair in enumerate(PAIRS)
-    ]
-    results = lm.loglikelihood(requests, disable_tqdm=True)
+    # All PAIRS fit in one buffer, so this also checks packing.
+    results = _make_lm(model, tokenizer).loglikelihood(
+        _pair_requests(), disable_tqdm=True
+    )
 
     for (context, continuation), (logprob, is_greedy) in zip(
         PAIRS, results, strict=True
@@ -144,13 +154,15 @@ def test_loglikelihood_matches_reference(model, tokenizer):
         assert is_greedy == expected_greedy
 
 
-def test_loglikelihood_rolling_matches_reference(model, tokenizer):
-    lm = _make_lm(model, tokenizer)
-    requests = [
-        Instance("loglikelihood_rolling", {}, (doc,), idx)
-        for idx, doc in enumerate(DOCUMENTS)
-    ]
-    results = lm.loglikelihood_rolling(requests, disable_tqdm=True)
+# 7 applies lm_head to the rows in several chunks.
+@pytest.mark.parametrize("chunk_rows", [lm_module._LOGITS_CHUNK_ROWS, 7])
+def test_loglikelihood_rolling_matches_reference(
+    model, tokenizer, monkeypatch, chunk_rows
+):
+    monkeypatch.setattr(lm_module, "_LOGITS_CHUNK_ROWS", chunk_rows)
+    results = _make_lm(model, tokenizer).loglikelihood_rolling(
+        _rolling_requests(), disable_tqdm=True
+    )
 
     for doc, logprob in zip(DOCUMENTS, results, strict=True):
         tokens = tokenizer.encode(doc, add_bos=False, add_eos=False)
@@ -162,18 +174,6 @@ def test_loglikelihood_rolling_matches_reference(model, tokenizer):
             window = tokens[start : start + MAX_CONTEXT_LENGTH]
             expected += _reference_logprob(model, prefix, window)[0]
         assert logprob == pytest.approx(expected, abs=1e-3)
-
-
-def test_packing_matches_one_request_per_buffer(model, tokenizer):
-    requests = [
-        Instance("loglikelihood", {}, pair, idx) for idx, pair in enumerate(PAIRS)
-    ]
-    packed = _make_lm(model, tokenizer).loglikelihood(requests, disable_tqdm=True)
-    one_per_buffer = _make_lm(
-        model, tokenizer, num_tokens_per_batch=MAX_CONTEXT_LENGTH
-    ).loglikelihood(requests, disable_tqdm=True)
-    for (a, _), (b, _) in zip(packed, one_per_buffer, strict=True):
-        assert a == pytest.approx(b, abs=1e-4)
 
 
 def test_pack_respects_limits(model, tokenizer):
@@ -197,11 +197,10 @@ def test_cast_parameters_keeps_complex_rope_cache(model, tokenizer):
         for a, b in zip(model.buffers(), bf16_model.buffers(), strict=True)
     )
 
-    requests = [
-        Instance("loglikelihood", {}, pair, idx) for idx, pair in enumerate(PAIRS)
-    ]
-    fp32 = _make_lm(model, tokenizer).loglikelihood(requests, disable_tqdm=True)
-    bf16 = _make_lm(bf16_model, tokenizer).loglikelihood(requests, disable_tqdm=True)
+    fp32 = _make_lm(model, tokenizer).loglikelihood(_pair_requests(), disable_tqdm=True)
+    bf16 = _make_lm(bf16_model, tokenizer).loglikelihood(
+        _pair_requests(), disable_tqdm=True
+    )
     for (a, _), (b, _) in zip(fp32, bf16, strict=True):
         assert b == pytest.approx(a, rel=0.02)
 
@@ -230,18 +229,3 @@ def test_load_weights_round_trips_dcp(model, tmp_path):
         torch.testing.assert_close(
             value.full_tensor().cpu(), expected[key], rtol=0, atol=0
         )
-
-
-def test_chunked_lm_head_matches_single_chunk(model, tokenizer, monkeypatch):
-    requests = [
-        Instance("loglikelihood_rolling", {}, (doc,), idx)
-        for idx, doc in enumerate(DOCUMENTS)
-    ]
-    single = _make_lm(model, tokenizer).loglikelihood_rolling(
-        requests, disable_tqdm=True
-    )
-    monkeypatch.setattr(lm_module, "_LOGITS_CHUNK_ROWS", 7)
-    chunked = _make_lm(model, tokenizer).loglikelihood_rolling(
-        requests, disable_tqdm=True
-    )
-    assert chunked == pytest.approx(single, abs=1e-4)

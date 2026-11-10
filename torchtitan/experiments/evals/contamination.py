@@ -4,29 +4,12 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Find eval questions that also appear in a run's training data.
+"""Find eval questions whose 13-grams also occur in a run's training data.
 
-An eval question counts as contaminated when one of its 13-word sequences
-(13-grams) also occurs in a training document, the test used for GPT-3 and by
-lm-eval's decontamination tools. Text is lowercased and stripped of
-punctuation before comparing, with lm-eval's Janitor normalization.
-
-The training data is read through the training config's own dataloader and
-decoded back to text, so the check covers exactly what the run trains on,
-whatever the data source. By default it scans the run's whole token budget
-(training.steps x training.num_tokens_per_train_step).
-
-Usage (CPU only; each process scans its own share of the data)::
-
-    torchrun --nproc_per_node=32 -m torchtitan.experiments.evals.contamination \\
-        --tasks trainstation_full [--max-tokens 1000000000] \\
-        -- --module llama3 --config llama3_8b [training overrides]
-
-The report goes to ``<dump_folder>/evals/contamination.json``. The eval job's
-``--decontaminate`` option then also scores each task on its clean questions.
+Writes ``<dump_folder>/evals/contamination.json`` for the eval job's
+``--decontaminate``; see README.md for the method and usage.
 """
 
-import json
 import logging
 import os
 import sys
@@ -36,7 +19,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch.distributed as dist
-import tyro
 from lm_eval.decontamination.janitor import Janitor
 from lm_eval.tasks import TaskManager
 from lm_eval.utils import apply_template
@@ -45,8 +27,11 @@ from torchtitan.components.tokenizer import BaseTokenizer
 from torchtitan.config import ConfigManager
 from torchtitan.experiments.evals.evaluate import (
     broadcast_from_rank0,
+    CONTAMINATION_REPORT,
     expand_tasks,
+    parse_args,
     TASKS_DIR,
+    write_json,
 )
 from torchtitan.observability.logging import init_logger
 
@@ -151,17 +136,12 @@ def batch_documents(batch: dict[str, Any], tokenizer: BaseTokenizer) -> list[str
     n-grams never span two documents.
     """
     tokens = batch["input"].reshape(-1)
-    keep = ~batch["padding_mask"].reshape(-1) if "padding_mask" in batch else None
-    if "positions" in batch:
-        starts = (batch["positions"].reshape(-1) == 0).nonzero().flatten().tolist()
-    else:
-        starts = [0]
+    keep = ~batch["padding_mask"].reshape(-1)
+    starts = (batch["positions"].reshape(-1) == 0).nonzero().flatten().tolist()
     bounds = sorted(set(starts) | {0}) + [tokens.numel()]
     documents = []
     for start, end in zip(bounds[:-1], bounds[1:]):
-        segment = tokens[start:end]
-        if keep is not None:
-            segment = segment[keep[start:end]]
+        segment = tokens[start:end][keep[start:end]]
         if segment.numel():
             documents.append(tokenizer.decode(segment.tolist()))
     return documents
@@ -181,12 +161,7 @@ def token_budget(args: ContaminationConfig, config: Any) -> int:
 
 def main() -> None:
     init_logger()
-    argv = sys.argv[1:]
-    if "--" not in argv:
-        raise ValueError("Pass the training config after '--'.")
-    split = argv.index("--")
-    args = tyro.cli(ContaminationConfig, args=argv[:split])
-    train_args = argv[split + 1 :]
+    args, train_args = parse_args(ContaminationConfig, sys.argv[1:])
     config = ConfigManager().parse_args(train_args)
 
     dist.init_process_group("gloo")
@@ -263,11 +238,8 @@ def main() -> None:
                 for name in sorted(index.num_docs)
             },
         }
-        os.makedirs(output_folder, exist_ok=True)
-        path = os.path.join(output_folder, "contamination.json")
-        with open(f"{path}.tmp", "w") as f:
-            json.dump(report, f, indent=1)
-        os.replace(f"{path}.tmp", path)
+        path = os.path.join(output_folder, CONTAMINATION_REPORT)
+        write_json(path, report, indent=1)
         for name, entry in report["tasks"].items():
             if entry["num_contaminated"]:
                 logger.info(

@@ -17,8 +17,6 @@ from lm_eval.tasks import TaskManager
 
 from torchtitan.experiments.evals.evaluate import (
     expand_tasks,
-    missing_tasks,
-    results_path,
     TASKS_DIR,
     write_on_rank0,
 )
@@ -51,15 +49,6 @@ def test_expand_tasks(task_manager):
         "piqa",
     ]
     assert expand_tasks(["mmlu"], task_manager) == ["mmlu"]
-
-
-def test_missing_tasks(tmp_path):
-    output = str(tmp_path)
-    path = results_path(output, 100, "hellaswag")
-    os.makedirs(os.path.dirname(path))
-    open(path, "w").close()
-    assert missing_tasks(output, 100, ["hellaswag", "piqa"]) == ["piqa"]
-    assert missing_tasks(output, 200, ["hellaswag"]) == ["hellaswag"]
 
 
 def _write_worker(rank: int, init_file: str, path: str, errors_dir: str) -> None:

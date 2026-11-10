@@ -5,53 +5,24 @@
 # LICENSE file in the root directory of this source tree.
 
 import sys
-from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from torchtitan.experiments.evals.wandb_logger import EvalWandBLogger, flatten_results
 
-RECORD = {
-    "results": {
-        "hellaswag": {
-            "alias": "hellaswag",
-            "acc,none": 0.25,
-            "acc_stderr,none": 0.01,
-            "acc_norm,none": 0.3,
-        },
-        "gsm8k": {"exact_match,strict-match": 0.1},
-        "trainstation_mmlu": {"acc,none": 0.4, "acc_stderr,none": "N/A"},
-    }
+RESULTS = {
+    "hellaswag": {
+        "alias": "hellaswag",
+        "acc,none": 0.25,
+        "acc_stderr,none": 0.01,
+        "acc_norm,none": 0.3,
+    },
+    "gsm8k": {"exact_match,strict-match": 0.1},
+    "trainstation_mmlu": {"acc,none": 0.4, "acc_stderr,none": "N/A"},
 }
 
 
-class _FakeRun:
-    def __init__(self):
-        self.defined = []
-        self.logged = []
-
-    def define_metric(self, name, step_metric=None):
-        self.defined.append((name, step_metric))
-
-    def log(self, data):
-        self.logged.append(data)
-
-    def finish(self):
-        pass
-
-
-def _install_fake_wandb(monkeypatch):
-    calls = {}
-    run = _FakeRun()
-
-    def init(**kwargs):
-        calls.update(kwargs)
-        return run
-
-    monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(init=init))
-    return calls, run
-
-
 def test_flatten_results():
-    assert flatten_results(RECORD) == {
+    assert flatten_results(RESULTS) == {
         "eval/hellaswag/acc": 0.25,
         "eval/hellaswag/acc_stderr": 0.01,
         "eval/hellaswag/acc_norm": 0.3,
@@ -60,25 +31,30 @@ def test_flatten_results():
     }
 
 
+def _init_kwargs(monkeypatch, output_folder: str, suite: str) -> dict:
+    wandb = MagicMock()
+    monkeypatch.setitem(sys.modules, "wandb", wandb)
+    EvalWandBLogger(output_folder=output_folder, suite=suite, config={})
+    return wandb.init.call_args.kwargs
+
+
 def test_logger_plots_against_train_step(monkeypatch, tmp_path):
     monkeypatch.setenv("WANDB_RUN_NAME", "run7")
     monkeypatch.delenv("WANDB_RUN_GROUP", raising=False)
-    calls, run = _install_fake_wandb(monkeypatch)
+    wandb = MagicMock()
+    monkeypatch.setitem(sys.modules, "wandb", wandb)
 
     output_folder = str(tmp_path / "run7" / "evals")
     logger = EvalWandBLogger(output_folder=output_folder, suite="quick", config={})
-    logger.log(300, RECORD)
+    logger.log(300, RESULTS, {})
 
-    assert calls["name"] == "run7-eval-quick"
-    assert calls["group"] == "run7"
-    assert calls["resume"] == "allow"
-    assert ("eval/*", "train_step") in run.defined
-    assert run.logged == [{"train_step": 300, **flatten_results(RECORD)}]
+    kwargs = wandb.init.call_args.kwargs
+    assert kwargs["name"] == "run7-eval-quick"
+    assert kwargs["group"] == "run7"
+    run = wandb.init.return_value
+    run.define_metric.assert_any_call("eval/*", step_metric="train_step")
+    run.log.assert_called_once_with({"train_step": 300, **flatten_results(RESULTS)})
 
     # A restarted job resumes the same run; another suite gets its own.
-    restarted, _ = _install_fake_wandb(monkeypatch)
-    EvalWandBLogger(output_folder=output_folder, suite="quick", config={})
-    assert restarted["id"] == calls["id"]
-    other_suite, _ = _install_fake_wandb(monkeypatch)
-    EvalWandBLogger(output_folder=output_folder, suite="full", config={})
-    assert other_suite["id"] != calls["id"]
+    assert _init_kwargs(monkeypatch, output_folder, "quick")["id"] == kwargs["id"]
+    assert _init_kwargs(monkeypatch, output_folder, "full")["id"] != kwargs["id"]

@@ -64,18 +64,11 @@ def test_batch_documents_splits_at_document_starts_and_drops_padding():
         "positions": torch.tensor([0, 1, 2, 0, 1, 0, 1]),
         "padding_mask": torch.tensor([False, False, False, False, False, True, True]),
     }
-    assert batch_documents(batch, _WordTokenizer()) == ["w1 w2 w3", "w4 w5"]
-
-
-def test_documents_do_not_match_across_boundaries():
-    index = EvalIndex(ngram_size=4)
-    index.add("task_a", 0, "w3 w4 w5 w6")
-    batch = {
-        "input": torch.tensor([1, 2, 3, 4, 5, 6]),
-        "positions": torch.tensor([0, 1, 2, 3, 0, 1]),
-    }
     documents = batch_documents(batch, _WordTokenizer())
-    assert documents == ["w1 w2 w3 w4", "w5 w6"]
+    assert documents == ["w1 w2 w3", "w4 w5"]
+    # An n-gram spanning the document boundary must not match.
+    index = EvalIndex(ngram_size=4)
+    index.add("task_a", 0, "w2 w3 w4 w5")
     assert all(not index.match(document) for document in documents)
 
 
