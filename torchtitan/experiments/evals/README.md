@@ -113,7 +113,11 @@ It reads the training data through the run's own dataloader and decodes it
 back to text, so it checks exactly what the run trains on, whatever the data
 source. By default it scans the run's whole token budget
 (`training.steps` x `training.num_tokens_per_train_step`). It needs no GPUs,
-and each process scans its own share of the data:
+and each process scans its own share of the data. Run it with as many
+processes as the training job's data-parallel degree: each process reads the
+dataloader shard of the training rank with the same index, so with a different
+count the scan covers a differently sharded stream, not exactly the tokens the
+run trains on.
 
 ```bash
 torchrun --nproc_per_node=32 -m torchtitan.experiments.evals.contamination \
