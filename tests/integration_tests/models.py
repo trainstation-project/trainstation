@@ -174,4 +174,52 @@ def build_model_tests_list() -> list[OverrideDefinitions]:
             skip_rocm_test=True,
             use_real_pg=True,
         ),
+        # Integration Test Cases for GptBase (GQA + MLA, dense MLP + MoE)
+        OverrideDefinitions(
+            configs=[recipes.gpt_base_debugmodel_fsdp2_tp2_ep2_spmd_typecheck],
+            test_descr="GptBase SPMD-typed FSDP+TP+SP+EP",
+            test_name="gpt_base_fsdp+tp+sp+ep_spmd_typecheck",
+            ngpu=4,
+        ),
+        OverrideDefinitions(
+            configs=[recipes.gpt_base_debugmodel_fsdp4_tp2_ep4_compile],
+            test_descr="GptBase FSDP+TP+EP+compile",
+            test_name="gpt_base_fsdp+tp+ep+compile",
+            ngpu=8,
+        ),
+        OverrideDefinitions(
+            configs=[recipes.gpt_base_debugmodel_fsdp2_cp2_pp2_ep4_ptrr_sac],
+            test_descr="GptBase PP+FSDP+CP(ptrr)+EP+SACOP",
+            test_name="gpt_base_pp+fsdp+cp_ptrr+ep+sacop",
+            ngpu=8,
+            use_real_pg=True,
+        ),
+        OverrideDefinitions(
+            configs=[recipes.gpt_base_debugmodel_varlen_fsdp4_pp2_ep4_sac],
+            test_descr="GptBase PP+FSDP+EP+SACOP with VarlenInnerAttention",
+            test_name="gpt_base_pp+fsdp+ep+sacop_varlen",
+            ngpu=8,
+            use_real_pg=True,
+        ),
+        OverrideDefinitions(
+            configs=[recipes.gpt_base_debugmodel_tp2_cp2_pp2_sp],
+            test_descr="GptBase TP+CP+PP+SP",
+            test_name="gpt_base_tp+cp+pp+sp",
+            ngpu=8,
+            use_real_pg=True,
+        ),
+        OverrideDefinitions(
+            configs=[recipes.gpt_base_debugmodel_dist_muon_fsdp2_pp2_ep2],
+            test_descr="GptBase DistMuon PP+FSDP+EP",
+            test_name="gpt_base_dist_muon_pp+fsdp+ep",
+            ngpu=4,
+            timeout=600,
+            use_real_pg=True,
+        ),
+        OverrideDefinitions(
+            configs=[recipes.gpt_base_debugmodel_dist_muon_fsdp8_ep8],
+            test_descr="GptBase DistMuon FSDP+EP",
+            test_name="gpt_base_dist_muon_fsdp+ep",
+            ngpu=8,
+        ),
     ]

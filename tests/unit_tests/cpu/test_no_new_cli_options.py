@@ -363,6 +363,7 @@ _GUARDED_CONFIGS = (
     ("llama3", "sft_debugmodel"),
     ("deepseek_v3", "deepseek_v3_debugmodel"),
     ("deepseek_v4", "deepseek_v4_debugmodel"),
+    ("gpt_base", "gpt_base_debugmodel"),
     ("qwen3", "qwen3_debugmodel"),
     ("qwen3_5", "qwen35_debugmodel_moe"),
     ("qwen3_6", "qwen36_debugmodel_moe"),

@@ -9,6 +9,7 @@ _supported_models = frozenset(
         "deepseek_v3",
         "deepseek_v4",
         "flux",
+        "gpt_base",
         "llama3",
         "qwen3",
         "qwen3_5",

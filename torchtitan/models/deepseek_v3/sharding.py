@@ -62,7 +62,7 @@ def set_deepseek_v3_sharding_config(
 
     set_decoder_sharding_config(config, enable_sp=enable_sp)
     for layer_cfg in config.layers:
-        _set_deepseek_v3_layer_sharding(
+        set_deepseek_v3_layer_sharding(
             layer_cfg, enable_sp=enable_sp, enable_ep=enable_ep
         )
     if len(config.mtp_layers) > 0:
@@ -73,7 +73,7 @@ def set_deepseek_v3_sharding_config(
         )
 
 
-def _set_deepseek_v3_layer_sharding(
+def set_deepseek_v3_layer_sharding(
     layer_cfg: "DeepSeekV3TransformerBlock.Config",
     *,
     enable_sp: bool,
@@ -177,7 +177,7 @@ def _set_deepseek_v3_mtp_sharding(
                     "mtp_input_valid_mask": token_id_placement(enable_sp=enable_sp),
                 },
             )
-        _set_deepseek_v3_layer_sharding(
+        set_deepseek_v3_layer_sharding(
             mtp_layer_cfg,
             enable_sp=enable_sp,
             enable_ep=enable_ep,
