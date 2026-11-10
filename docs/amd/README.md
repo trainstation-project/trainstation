@@ -31,6 +31,43 @@ Steady state (steps 11-300): **9.3% MFU**, **~8.3k tokens/s/GPU**,
 Isolated single-step dips (e.g. step ~111) are one-off stalls; the run
 otherwise holds a flat ~9% MFU.
 
+## Global batch size is the main lever
+
+At 16k tokens/GPU per step the step is dominated by per-step fixed costs:
+FSDP all-gather / reduce-scatter of the 30B params and the AdamW update do
+not scale with tokens. Growing the microbatch amortizes them (EP=1, compile,
+seq 4096, mean of steps 6-15 or 11-30):
+
+| tokens/GPU/microbatch | AC | peak mem | tokens/s/GPU | MFU |
+|---|---|---:|---:|---:|
+| 16k | none | 174 GiB | 10,919 | 12.2% |
+| 16k x 4 grad-accum | none | 174 GiB | 11,727 | 13.1% |
+| 32k | none | 278 GiB | 16,336 | 18.2% |
+| 64k | full | 91 GiB | 18,190 | 20.3% |
+| 64k | selective | 143 GiB | 19,721 | 22.0% |
+
+Gradient accumulation barely helps because FSDP still all-gathers and
+reduce-scatters on every microbatch (only HSDP skips the sync); only a larger
+microbatch amortizes the communication.
+
+Preview at 64k tokens/GPU, selective AC (30 steps):
+
+![MFU vs step, 64k](figures/mfu_vs_step_mb64k_preview.png)
+![Tokens/day vs step, 64k](figures/tokens_per_day_vs_step_mb64k_preview.png)
+
+Remaining issue: isolated single steps stall to ~7% MFU (e.g. steps 4, 9,
+28 above); not yet root-caused.
+
+## MoE gather backward kernel
+
+`x_TD[token_indices]` in the token dispatcher gathers every token top_k=8
+times; its default backward is an accumulating `index_put_` that sorts all
+T*K indices (`indexing_backward_kernel`, ~7% of GPU kernel time at 16k
+tokens/GPU). `torchtitan::topk_permute_gather` keeps the same forward but
+backpropagates via the inverse permutation plus a fixed-order fp32 sum over
+top_k (no sort, no atomics, deterministic). A/B at 64k tokens/GPU, selective
+AC, 30 steps: 19,327 -> 19,721 tokens/s/GPU (+2%).
+
 ## Expert-parallel sweep (15 steps, same settings)
 
 | EP degree | tokens/s/GPU | MFU |
