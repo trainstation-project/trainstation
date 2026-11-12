@@ -12,7 +12,7 @@
 Port of lm-engine's ``tools/data/preprocess_data.py`` without its Ray and
 remote-staging paths. Each JSON key gets its own ``<output-prefix>_<key>``
 dataset. Input formats: ``.jsonl``, ``.jsonl.zst`` (needs ``zstandard``),
-``.json.gz``, ``.parquet``, ``.arrow`` (pre-tokenized ``tokens`` column), or a
+``.jsonl.gz``, ``.json.gz``, ``.parquet``, ``.arrow`` (pre-tokenized ``tokens`` column), or a
 Hugging Face dataset name. A directory input is processed file by file, up to
 ``--max-local-processes`` in parallel.
 
@@ -31,6 +31,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from argparse import ArgumentParser, Namespace
 from collections.abc import Iterator
 
@@ -52,6 +53,14 @@ if is_zstandard_available():
     from zstandard import ZstdDecompressor
 
 logger = logging.getLogger(__name__)
+LOCAL_FILE_SUFFIXES = (
+    ".jsonl",
+    ".jsonl.zst",
+    ".jsonl.gz",
+    ".json.gz",
+    ".parquet",
+    ".arrow",
+)
 
 
 class ArrowIterator:
@@ -128,14 +137,14 @@ def convert_file(
     encoder = Encoder(tokenizer, json_keys, append_eos_token)
 
     if subset is not None and not os.path.isdir(input_file):
-        if input_file.endswith((".jsonl", ".jsonl.zst", ".json.gz", ".arrow")):
+        if input_file.endswith(LOCAL_FILE_SUFFIXES):
             raise ValueError(f"{input_file}: --subset only applies to HF datasets")
 
     if input_file.endswith(".jsonl"):
         encoded_docs = map(encoder.encode, open(input_file, "r", encoding="utf-8"))
     elif input_file.endswith(".jsonl.zst"):
         encoded_docs = map(encoder.encode_jsonl_zstd, _zstd_lines(input_file))
-    elif input_file.endswith(".json.gz"):
+    elif input_file.endswith((".json.gz", ".jsonl.gz")):
         encoded_docs = map(
             encoder.encode, gzip.open(input_file, "rt", encoding="utf-8")
         )
@@ -188,16 +197,17 @@ def collect_files(args: Namespace) -> list[tuple[str, str]]:
         return [(args.input, args.output_prefix)]
 
     files = []
-    for root, _, names in os.walk(args.input):
+    for root, directories, names in os.walk(args.input):
+        directories[:] = [name for name in directories if not name.startswith(".")]
         for name in names:
-            if name.startswith("."):
+            if name.startswith(".") or not name.endswith(LOCAL_FILE_SUFFIXES):
                 continue
             output_dir = os.path.join(
                 args.output_prefix, root.removeprefix(args.input).lstrip(os.path.sep)
             )
             os.makedirs(output_dir, exist_ok=True)
             output_prefix = os.path.join(output_dir, os.path.splitext(name)[0])
-            # .jsonl.zst has a two-part extension.
+            # Compressed JSONL files have a two-part extension.
             if output_prefix.endswith(".jsonl"):
                 output_prefix = os.path.splitext(output_prefix)[0]
             files.append((os.path.join(root, name), output_prefix))
@@ -207,11 +217,14 @@ def collect_files(args: Namespace) -> list[tuple[str, str]]:
 
 def process_with_subprocess(args: Namespace, files: list[tuple[str, str]]) -> None:
     """Tokenize each file in its own process, at most ``max_local_processes`` at once."""
+    if args.max_local_processes < 1:
+        raise ValueError("max_local_processes must be at least 1")
     logger.info(
         f"Processing {len(files)} files with subprocesses "
         f"(max {args.max_local_processes} parallel)"
     )
     processes = []
+    failed = []
     for input_file, output_prefix in tqdm(files, desc="Tokenizing"):
         cmd = [
             sys.executable,
@@ -231,11 +244,22 @@ def process_with_subprocess(args: Namespace, files: list[tuple[str, str]]) -> No
             cmd += ["--append-eod"]
 
         while len(processes) >= args.max_local_processes:
-            processes = [p for p in processes if p.poll() is None]
+            running = []
+            for process in processes:
+                returncode = process.poll()
+                if returncode is None:
+                    running.append(process)
+                elif returncode != 0:
+                    failed.append(process.args)
+            processes = running
+            if len(processes) >= args.max_local_processes:
+                time.sleep(0.1)
 
         processes.append(subprocess.Popen(cmd))
 
-    failed = [p.args for p in tqdm(processes, desc="Waiting for jobs") if p.wait() != 0]
+    failed.extend(
+        p.args for p in tqdm(processes, desc="Waiting for jobs") if p.wait() != 0
+    )
     if failed:
         raise RuntimeError(f"{len(failed)} tokenization jobs failed: {failed}")
 

@@ -10,6 +10,7 @@ import gzip
 import json
 import os
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pyarrow as pa
@@ -114,8 +115,9 @@ def test_convert_empty_document_is_dropped(tmp_path) -> None:
     assert _documents(f"{output_prefix}_text") == [_tokens("x") + [_EOS]]
 
 
-def test_convert_json_gz(tmp_path) -> None:
-    input_file = tmp_path / "data.json.gz"
+@pytest.mark.parametrize("suffix", [".json.gz", ".jsonl.gz"])
+def test_convert_json_gz(tmp_path, suffix) -> None:
+    input_file = tmp_path / f"data{suffix}"
     with gzip.open(input_file, "wt", encoding="utf-8") as f:
         f.write(json.dumps({"text": "gz"}) + "\n")
     output_prefix = str(tmp_path / "data")
@@ -152,8 +154,9 @@ def test_convert_pretokenized_arrow(tmp_path) -> None:
     assert _documents(f"{output_prefix}_text") == [[5, 6, 7, _EOS], [8, _EOS]]
 
 
-def test_convert_rejects_subset_for_file_input(tmp_path) -> None:
-    input_file = tmp_path / "data.jsonl"
+@pytest.mark.parametrize("suffix", [".jsonl", ".jsonl.gz", ".parquet"])
+def test_convert_rejects_subset_for_file_input(tmp_path, suffix) -> None:
+    input_file = tmp_path / f"data{suffix}"
     input_file.write_text(json.dumps({"text": "a"}) + "\n")
     with pytest.raises(ValueError):
         convert_file(
@@ -166,7 +169,12 @@ def test_collect_files_mirrors_directory_layout(tmp_path) -> None:
     (input_dir / "sub").mkdir(parents=True)
     (input_dir / "a.jsonl").write_text("")
     (input_dir / "sub" / "b.jsonl.zst").write_bytes(b"")
+    (input_dir / "sub" / "c.jsonl.gz").write_bytes(b"")
     (input_dir / ".hidden").write_text("")
+    (input_dir / "README.md").write_text("Dataset documentation")
+    (input_dir / "download-manifest.json").write_text("{}")
+    (input_dir / ".cache").mkdir()
+    (input_dir / ".cache" / "cached.jsonl").write_text("")
     output_dir = tmp_path / "out"
 
     class _Args:
@@ -179,6 +187,7 @@ def test_collect_files_mirrors_directory_layout(tmp_path) -> None:
         (str(input_dir / "a.jsonl"), str(output_dir / "a")),
         # The two-part .jsonl.zst extension is stripped whole.
         (str(input_dir / "sub" / "b.jsonl.zst"), str(output_dir / "sub" / "b")),
+        (str(input_dir / "sub" / "c.jsonl.gz"), str(output_dir / "sub" / "c")),
     ]
     assert (output_dir / "sub").is_dir()
 
@@ -192,6 +201,36 @@ def test_collect_files_single_file(tmp_path) -> None:
         output_prefix = str(tmp_path / "out")
 
     assert collect_files(_Args()) == [(str(input_file), str(tmp_path / "out"))]
+
+
+@pytest.mark.parametrize("returncodes", [(1, 0), (0, 1)])
+def test_preprocess_reports_early_and_final_worker_failures(monkeypatch, returncodes):
+    codes = iter(returncodes)
+
+    def start_worker(command):
+        status = next(codes)
+        return SimpleNamespace(args=command, poll=lambda: status, wait=lambda: status)
+
+    monkeypatch.setattr(megatron_preprocess.subprocess, "Popen", start_worker)
+    args = SimpleNamespace(
+        max_local_processes=1,
+        tokenizer="tokenizer",
+        json_keys=["text"],
+        subset=None,
+        append_eod=True,
+    )
+    files = [("first.jsonl", "first"), ("second.jsonl", "second")]
+    failed_file = files[returncodes.index(1)][0]
+    with pytest.raises(RuntimeError, match=failed_file):
+        megatron_preprocess.process_with_subprocess(args, files)
+
+
+@pytest.mark.parametrize("workers", [0, -1])
+def test_preprocess_rejects_invalid_worker_count(workers):
+    with pytest.raises(ValueError, match="at least 1"):
+        megatron_preprocess.process_with_subprocess(
+            SimpleNamespace(max_local_processes=workers), []
+        )
 
 
 def test_preprocess_main_single_file(tmp_path, monkeypatch) -> None:
