@@ -294,3 +294,144 @@ def qwen35_debugmodel_varlen_attn_fsdp2_tp2_sac() -> Trainer.Config:
     _set_spmd_typechecking(config, typechecking=False)
     config.training.disable_cuda_graphs = True
     return config
+
+
+# GptTrainstation mixes GQA/MLA attention with dense MLP and MoE (with and without
+# shared experts) in one model, so these layouts cover every layer type at once.
+
+
+def gpt_trainstation_debugmodel_fsdp2_tp2_ep2_spmd_typecheck() -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        gpt_trainstation_debugmodel,
+    )
+
+    config = gpt_trainstation_debugmodel(seq_len=512)
+    _set_spmd_typechecking(config, typechecking=True)
+    config.parallelism.data_parallel_shard_degree = 2
+    config.parallelism.tensor_parallel_degree = 2
+    config.parallelism.enable_sequence_parallel = True
+    config.parallelism.expert_parallel_degree = 2
+    config.training.disable_cuda_graphs = True
+    return config
+
+
+def gpt_trainstation_debugmodel_fsdp4_tp2_ep4_compile() -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        gpt_trainstation_debugmodel,
+    )
+
+    config = gpt_trainstation_debugmodel(seq_len=2048)
+    _set_spmd_typechecking(config, typechecking=False)
+    config.parallelism.data_parallel_shard_degree = 4
+    config.parallelism.tensor_parallel_degree = 2
+    config.parallelism.expert_parallel_degree = 4
+    config.compile.enable = True
+    config.training.disable_cuda_graphs = True
+    return config
+
+
+def gpt_trainstation_debugmodel_fsdp2_cp2_pp2_ep4_ptrr_sac() -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        gpt_trainstation_debugmodel,
+    )
+
+    config = gpt_trainstation_debugmodel(seq_len=2048)
+    _set_spmd_typechecking(config, typechecking=False)
+    config.parallelism.data_parallel_shard_degree = 2
+    config.parallelism.context_parallel_degree = 2
+    config.parallelism.context_parallel_load_balancer = "ptrr"
+    config.parallelism.pipeline_parallel_degree = 2
+    config.parallelism.num_pp_microbatches = 8
+    config.parallelism.pipeline_parallel_schedule = "Interleaved1F1B"
+    config.parallelism.expert_parallel_degree = 4
+    config.activation_checkpoint = SelectiveAC.Config()
+    config.training.max_context_length = 512
+    config.training.num_tokens_per_microbatch_per_dp_rank = 1024
+    config.training.steps = 10
+    config.training.disable_cuda_graphs = True
+    return apply_transforms(
+        config,
+        [ContextParallelTransform(inner_attention=KVAllGatherCPFlexInnerAttention)],
+    )
+
+
+def gpt_trainstation_debugmodel_varlen_fsdp4_pp2_ep4_sac() -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        gpt_trainstation_debugmodel_varlen,
+    )
+
+    config = gpt_trainstation_debugmodel_varlen(seq_len=2048)
+    _set_spmd_typechecking(config, typechecking=False)
+    config.parallelism.data_parallel_shard_degree = 4
+    config.parallelism.pipeline_parallel_degree = 2
+    config.parallelism.num_pp_microbatches = 8
+    config.parallelism.pipeline_parallel_schedule = "Interleaved1F1B"
+    config.parallelism.expert_parallel_degree = 4
+    config.activation_checkpoint = SelectiveAC.Config()
+    config.training.num_tokens_per_microbatch_per_dp_rank = 1024
+    config.training.num_tokens_per_train_step = 131072
+    config.training.disable_cuda_graphs = True
+    return config
+
+
+def gpt_trainstation_debugmodel_tp2_cp2_pp2_sp() -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        gpt_trainstation_debugmodel,
+    )
+
+    config = gpt_trainstation_debugmodel(seq_len=2048)
+    _set_spmd_typechecking(config, typechecking=False)
+    config.parallelism.data_parallel_shard_degree = 1
+    config.parallelism.tensor_parallel_degree = 2
+    config.parallelism.enable_sequence_parallel = True
+    config.parallelism.context_parallel_degree = 2
+    config.parallelism.pipeline_parallel_degree = 2
+    config.parallelism.num_pp_microbatches = 2
+    config.parallelism.pipeline_parallel_schedule = "1F1B"
+    config.training.max_context_length = 512
+    config.training.num_tokens_per_microbatch_per_dp_rank = 512
+    config.training.disable_cuda_graphs = True
+    return apply_transforms(
+        config,
+        [ContextParallelTransform(inner_attention=KVAllGatherCPFlexInnerAttention)],
+    )
+
+
+def _gpt_trainstation_dist_muon(
+    *, data_parallel_shard_degree: int, expert_parallel_degree: int
+) -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        dist_muon_optimizer,
+        gpt_trainstation_debugmodel,
+    )
+
+    config = gpt_trainstation_debugmodel(seq_len=512)
+    config.parallelism.data_parallel_shard_degree = data_parallel_shard_degree
+    config.parallelism.expert_parallel_degree = expert_parallel_degree
+    config.training.disable_cuda_graphs = True
+    # Built after the parallelism above: routed-expert compute layouts depend
+    # on whether EP is enabled.
+    config.optimizer = dist_muon_optimizer(
+        config.model_spec, lr=8e-4, parallelism=config.parallelism
+    )
+    return config
+
+
+def gpt_trainstation_debugmodel_dist_muon_fsdp2_pp2_ep2() -> Trainer.Config:
+    """DistMuon with PP: each stage consumes its local subset of the global
+    compute-sharding map. Interleaved1F1B with two stages per rank gives each
+    of the four virtual stages two layers."""
+    config = _gpt_trainstation_dist_muon(
+        data_parallel_shard_degree=2, expert_parallel_degree=2
+    )
+    _set_spmd_typechecking(config, typechecking=False)
+    config.parallelism.pipeline_parallel_degree = 2
+    config.parallelism.pipeline_parallel_schedule = "Interleaved1F1B"
+    config.parallelism.num_pp_microbatches = 4
+    return config
+
+
+def gpt_trainstation_debugmodel_dist_muon_fsdp8_ep8() -> Trainer.Config:
+    return _gpt_trainstation_dist_muon(
+        data_parallel_shard_degree=8, expert_parallel_degree=8
+    )

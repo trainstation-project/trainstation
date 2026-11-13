@@ -57,10 +57,10 @@ def set_qwen3_sharding_config(
 
     set_decoder_sharding_config(config, enable_sp=enable_sp)
     for layer_cfg in config.layers:
-        _set_qwen3_layer_sharding(layer_cfg, enable_sp=enable_sp, enable_ep=enable_ep)
+        set_qwen3_layer_sharding(layer_cfg, enable_sp=enable_sp, enable_ep=enable_ep)
 
 
-def _set_qwen3_layer_sharding(
+def set_qwen3_layer_sharding(
     layer_cfg: "Qwen3TransformerBlock.Config",
     *,
     enable_sp: bool,
