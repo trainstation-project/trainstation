@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for torchtitan::topk_permute_gather (MoE expert-sorted token gather)."""
+"""Tests for topk_permute_gather (MoE expert-sorted token gather)."""
 
 import unittest
 
@@ -46,10 +46,6 @@ class TestTopkPermuteGather(unittest.TestCase):
                 lambda x: topk_permute_gather(x, slot_perm_N, 2), (x_TD,)
             )
         )
-
-    def test_opcheck(self):
-        x_TD, slot_perm_N = _inputs(16, 4, 8, 8, torch.float32)
-        torch.library.opcheck(topk_permute_gather, (x_TD, slot_perm_N, 4))
 
 
 if __name__ == "__main__":
