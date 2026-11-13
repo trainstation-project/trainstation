@@ -5,4 +5,7 @@
 # Copyright (c) 2026, Mayank Mishra
 # **************************************************
 
+from .cross_entropy import cross_entropy
 from .swiglu import swiglu, swiglu_packed
+
+__all__ = ["cross_entropy", "swiglu", "swiglu_packed"]
