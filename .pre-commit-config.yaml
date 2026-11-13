@@ -22,6 +22,8 @@ repos:
     hooks:
     -   id: insert-license
         files: \.py$
+        # code ported from lm-engine keeps lm-engine's header only
+        exclude: ^(torchtitan/kernels/|tests/unit_tests/gpu/kernels/)
         args:
         - --license-filepath
         - assets/license_header.txt

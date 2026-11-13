@@ -155,7 +155,7 @@ class MTPTransformerBlock(TransformerBlock):
             assert config.feed_forward is not None
             self.feed_forward = config.feed_forward.build()
 
-    def forward(
+    def forward(  # pyrefly: ignore [bad-param-name-override]
         self,
         mtp_input_embed: torch.Tensor,
         prev_embed: torch.Tensor,
@@ -174,14 +174,12 @@ class MTPTransformerBlock(TransformerBlock):
         h = self.eh_proj(
             torch.cat([self.enorm(mtp_input_embed), self.hnorm(prev_embed)], dim=-1)
         )
-        h = h + self.attention(self.attention_norm(h), attention_masks, positions)
+        attn_out = self.attention(self.attention_norm(h), attention_masks, positions)
+        ffn_in, h = self.ffn_norm(attn_out, residual=h)
         if self.moe_enabled:
-            h = h + self.moe(
-                self.ffn_norm(h),
-                padding_mask_T=mtp_padding_mask_T,
-            )
+            h = h + self.moe(ffn_in, padding_mask_T=mtp_padding_mask_T)
         else:
-            h = h + self.feed_forward(self.ffn_norm(h))
+            h = h + self.feed_forward(ffn_in)
         return self.mtp_norm(h)
 
 
