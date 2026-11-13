@@ -1,4 +1,4 @@
-# GptBase
+# GptTrainstation
 
 A decoder that exists for test coverage, not for training a released model. It
 has no checkpoint and no state-dict adapter.
@@ -16,7 +16,7 @@ pattern so every stage of a 2- or 4-stage pipeline split sees each type:
 Sharding reuses Qwen3's per-layer sharding for GQA layers and DeepSeek V3's for
 MLA layers. Parallelize reuses Qwen3's generic decoder path.
 
-Integration tests live in `tests/integration_tests/models.py` (`gpt_base_*`)
+Integration tests live in `tests/integration_tests/models.py` (`gpt_trainstation_*`)
 and cover FSDP, TP+SP, CP (KV all-gather, ptrr load balancing), PP
 (1F1B, Interleaved1F1B), EP, compile, selective AC, varlen attention, SPMD type
 checking, and DistMuon (`config_registry.dist_muon_optimizer`).

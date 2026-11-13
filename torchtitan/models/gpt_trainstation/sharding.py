@@ -13,16 +13,16 @@ from torchtitan.models.deepseek_v3.sharding import set_deepseek_v3_layer_shardin
 from torchtitan.models.qwen3.sharding import set_qwen3_layer_sharding
 
 if TYPE_CHECKING:
-    from torchtitan.models.gpt_base.model import GptBaseModel
+    from torchtitan.models.gpt_trainstation.model import GptTrainstationModel
 
 
-def set_gpt_base_sharding_config(
-    config: "GptBaseModel.Config",
+def set_gpt_trainstation_sharding_config(
+    config: "GptTrainstationModel.Config",
     *,
     enable_sp: bool,
     enable_ep: bool,
 ) -> None:
-    """Fill ``sharding_config`` on all GptBase sub-configs.
+    """Fill ``sharding_config`` on all GptTrainstation sub-configs.
 
     Each layer reuses the sharding of the model its attention type comes from:
     GQA layers use Qwen3's, MLA layers use DeepSeek V3's. Both handle dense FFN
@@ -41,5 +41,5 @@ def set_gpt_base_sharding_config(
             )
         else:
             raise TypeError(
-                f"Unsupported attention type {type(attention).__name__} in GptBase."
+                f"Unsupported attention type {type(attention).__name__} in GptTrainstation."
             )

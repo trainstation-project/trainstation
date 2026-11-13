@@ -13,10 +13,10 @@ from torchtitan.models.common.attention import GQAttention
 from torchtitan.models.common.aux_loss import AuxLoss
 from torchtitan.models.deepseek_v3.model import Attention as MLAttention
 from torchtitan.models.deepseek_v3.moe import DeepSeekV3Router
-from torchtitan.models.gpt_base import gpt_base_configs
-from torchtitan.models.gpt_base.config_registry import (
+from torchtitan.models.gpt_trainstation import gpt_trainstation_configs
+from torchtitan.models.gpt_trainstation.config_registry import (
     dist_muon_optimizer,
-    gpt_base_debugmodel,
+    gpt_trainstation_debugmodel,
 )
 
 _SEQ_LEN = 64
@@ -42,7 +42,7 @@ class _CausalAttention(nn.Module):
 
 
 def _debug_config():
-    build_config, _ = gpt_base_configs["debugmodel"]
+    build_config, _ = gpt_trainstation_configs["debugmodel"]
     return build_config("flex", seq_len=_SEQ_LEN)
 
 
@@ -102,7 +102,7 @@ def test_forward_backward() -> None:
     "tp,ep,enable_sp", [(1, 1, False), (2, 2, True), (2, 4, False)]
 )
 def test_sharding_config_covers_every_layer(tp: int, ep: int, enable_sp: bool) -> None:
-    trainer_config = gpt_base_debugmodel(seq_len=_SEQ_LEN)
+    trainer_config = gpt_trainstation_debugmodel(seq_len=_SEQ_LEN)
     trainer_config.parallelism.tensor_parallel_degree = tp
     trainer_config.parallelism.expert_parallel_degree = ep
     trainer_config.parallelism.enable_sequence_parallel = enable_sp
@@ -116,7 +116,7 @@ def test_sharding_config_covers_every_layer(tp: int, ep: int, enable_sp: bool) -
 
 
 def test_dist_muon_covers_every_matrix() -> None:
-    trainer_config = gpt_base_debugmodel(seq_len=_SEQ_LEN)
+    trainer_config = gpt_trainstation_debugmodel(seq_len=_SEQ_LEN)
     trainer_config.parallelism.expert_parallel_degree = 2
     optimizer = dist_muon_optimizer(
         trainer_config.model_spec, lr=1e-3, parallelism=trainer_config.parallelism

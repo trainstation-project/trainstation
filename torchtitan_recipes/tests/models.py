@@ -296,14 +296,16 @@ def qwen35_debugmodel_varlen_attn_fsdp2_tp2_sac() -> Trainer.Config:
     return config
 
 
-# GptBase mixes GQA/MLA attention with dense MLP and MoE (with and without
+# GptTrainstation mixes GQA/MLA attention with dense MLP and MoE (with and without
 # shared experts) in one model, so these layouts cover every layer type at once.
 
 
-def gpt_base_debugmodel_fsdp2_tp2_ep2_spmd_typecheck() -> Trainer.Config:
-    from torchtitan.models.gpt_base.config_registry import gpt_base_debugmodel
+def gpt_trainstation_debugmodel_fsdp2_tp2_ep2_spmd_typecheck() -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        gpt_trainstation_debugmodel,
+    )
 
-    config = gpt_base_debugmodel(seq_len=512)
+    config = gpt_trainstation_debugmodel(seq_len=512)
     _set_spmd_typechecking(config, typechecking=True)
     config.parallelism.data_parallel_shard_degree = 2
     config.parallelism.tensor_parallel_degree = 2
@@ -313,10 +315,12 @@ def gpt_base_debugmodel_fsdp2_tp2_ep2_spmd_typecheck() -> Trainer.Config:
     return config
 
 
-def gpt_base_debugmodel_fsdp4_tp2_ep4_compile() -> Trainer.Config:
-    from torchtitan.models.gpt_base.config_registry import gpt_base_debugmodel
+def gpt_trainstation_debugmodel_fsdp4_tp2_ep4_compile() -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        gpt_trainstation_debugmodel,
+    )
 
-    config = gpt_base_debugmodel(seq_len=2048)
+    config = gpt_trainstation_debugmodel(seq_len=2048)
     _set_spmd_typechecking(config, typechecking=False)
     config.parallelism.data_parallel_shard_degree = 4
     config.parallelism.tensor_parallel_degree = 2
@@ -326,10 +330,12 @@ def gpt_base_debugmodel_fsdp4_tp2_ep4_compile() -> Trainer.Config:
     return config
 
 
-def gpt_base_debugmodel_fsdp2_cp2_pp2_ep4_ptrr_sac() -> Trainer.Config:
-    from torchtitan.models.gpt_base.config_registry import gpt_base_debugmodel
+def gpt_trainstation_debugmodel_fsdp2_cp2_pp2_ep4_ptrr_sac() -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        gpt_trainstation_debugmodel,
+    )
 
-    config = gpt_base_debugmodel(seq_len=2048)
+    config = gpt_trainstation_debugmodel(seq_len=2048)
     _set_spmd_typechecking(config, typechecking=False)
     config.parallelism.data_parallel_shard_degree = 2
     config.parallelism.context_parallel_degree = 2
@@ -349,10 +355,12 @@ def gpt_base_debugmodel_fsdp2_cp2_pp2_ep4_ptrr_sac() -> Trainer.Config:
     )
 
 
-def gpt_base_debugmodel_varlen_fsdp4_pp2_ep4_sac() -> Trainer.Config:
-    from torchtitan.models.gpt_base.config_registry import gpt_base_debugmodel_varlen
+def gpt_trainstation_debugmodel_varlen_fsdp4_pp2_ep4_sac() -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        gpt_trainstation_debugmodel_varlen,
+    )
 
-    config = gpt_base_debugmodel_varlen(seq_len=2048)
+    config = gpt_trainstation_debugmodel_varlen(seq_len=2048)
     _set_spmd_typechecking(config, typechecking=False)
     config.parallelism.data_parallel_shard_degree = 4
     config.parallelism.pipeline_parallel_degree = 2
@@ -366,10 +374,12 @@ def gpt_base_debugmodel_varlen_fsdp4_pp2_ep4_sac() -> Trainer.Config:
     return config
 
 
-def gpt_base_debugmodel_tp2_cp2_pp2_sp() -> Trainer.Config:
-    from torchtitan.models.gpt_base.config_registry import gpt_base_debugmodel
+def gpt_trainstation_debugmodel_tp2_cp2_pp2_sp() -> Trainer.Config:
+    from torchtitan.models.gpt_trainstation.config_registry import (
+        gpt_trainstation_debugmodel,
+    )
 
-    config = gpt_base_debugmodel(seq_len=2048)
+    config = gpt_trainstation_debugmodel(seq_len=2048)
     _set_spmd_typechecking(config, typechecking=False)
     config.parallelism.data_parallel_shard_degree = 1
     config.parallelism.tensor_parallel_degree = 2
@@ -387,15 +397,15 @@ def gpt_base_debugmodel_tp2_cp2_pp2_sp() -> Trainer.Config:
     )
 
 
-def _gpt_base_dist_muon(
+def _gpt_trainstation_dist_muon(
     *, data_parallel_shard_degree: int, expert_parallel_degree: int
 ) -> Trainer.Config:
-    from torchtitan.models.gpt_base.config_registry import (
+    from torchtitan.models.gpt_trainstation.config_registry import (
         dist_muon_optimizer,
-        gpt_base_debugmodel,
+        gpt_trainstation_debugmodel,
     )
 
-    config = gpt_base_debugmodel(seq_len=512)
+    config = gpt_trainstation_debugmodel(seq_len=512)
     config.parallelism.data_parallel_shard_degree = data_parallel_shard_degree
     config.parallelism.expert_parallel_degree = expert_parallel_degree
     config.training.disable_cuda_graphs = True
@@ -407,11 +417,13 @@ def _gpt_base_dist_muon(
     return config
 
 
-def gpt_base_debugmodel_dist_muon_fsdp2_pp2_ep2() -> Trainer.Config:
+def gpt_trainstation_debugmodel_dist_muon_fsdp2_pp2_ep2() -> Trainer.Config:
     """DistMuon with PP: each stage consumes its local subset of the global
     compute-sharding map. Interleaved1F1B with two stages per rank gives each
     of the four virtual stages two layers."""
-    config = _gpt_base_dist_muon(data_parallel_shard_degree=2, expert_parallel_degree=2)
+    config = _gpt_trainstation_dist_muon(
+        data_parallel_shard_degree=2, expert_parallel_degree=2
+    )
     _set_spmd_typechecking(config, typechecking=False)
     config.parallelism.pipeline_parallel_degree = 2
     config.parallelism.pipeline_parallel_schedule = "Interleaved1F1B"
@@ -419,5 +431,7 @@ def gpt_base_debugmodel_dist_muon_fsdp2_pp2_ep2() -> Trainer.Config:
     return config
 
 
-def gpt_base_debugmodel_dist_muon_fsdp8_ep8() -> Trainer.Config:
-    return _gpt_base_dist_muon(data_parallel_shard_degree=8, expert_parallel_degree=8)
+def gpt_trainstation_debugmodel_dist_muon_fsdp8_ep8() -> Trainer.Config:
+    return _gpt_trainstation_dist_muon(
+        data_parallel_shard_degree=8, expert_parallel_degree=8
+    )

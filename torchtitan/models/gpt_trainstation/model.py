@@ -18,7 +18,7 @@ from torchtitan.models.utils import (
 )
 
 
-class GptBaseTransformerBlock(TransformerBlock):
+class GptTrainstationTransformerBlock(TransformerBlock):
     """Transformer block whose attention and FFN types are chosen per layer.
 
     ``attention`` may be GQA (``GQAttention``) or multi-head latent attention
@@ -34,7 +34,7 @@ class GptBaseTransformerBlock(TransformerBlock):
         super().__init__()
         if (config.feed_forward is None) == (config.moe is None):
             raise ValueError(
-                "GptBaseTransformerBlock needs exactly one of feed_forward and moe."
+                "GptTrainstationTransformerBlock needs exactly one of feed_forward and moe."
             )
 
         self.attention = config.attention.build()
@@ -65,7 +65,7 @@ class GptBaseTransformerBlock(TransformerBlock):
         return x
 
 
-class GptBaseModel(Decoder):
+class GptTrainstationModel(Decoder):
     """Decoder that mixes every shared layer type in one model.
 
     It has no released checkpoint. Its purpose is test coverage: a single
@@ -84,10 +84,12 @@ class GptBaseModel(Decoder):
         ) -> None:
             Decoder.Config.update_from_config(self, config=config, **kwargs)
 
-            from torchtitan.models.gpt_base.sharding import set_gpt_base_sharding_config
+            from torchtitan.models.gpt_trainstation.sharding import (
+                set_gpt_trainstation_sharding_config,
+            )
 
             parallelism = config.parallelism
-            set_gpt_base_sharding_config(
+            set_gpt_trainstation_sharding_config(
                 self,
                 enable_sp=parallelism.enable_sequence_parallel,
                 enable_ep=parallelism.expert_parallel_degree > 1,

@@ -33,10 +33,10 @@ from torchtitan.protocols.model_spec import ModelSpec
 from torchtitan.trainer import Trainer
 
 from . import model_registry
-from .model import GptBaseModel
+from .model import GptTrainstationModel
 
 
-def gpt_base_debugmodel(
+def gpt_trainstation_debugmodel(
     seq_len: int | None = DEFAULT_DEBUG_MODEL_SEQ_LEN,
 ) -> Trainer.Config:
     model_spec = model_registry("debugmodel", seq_len=seq_len)
@@ -76,10 +76,10 @@ def gpt_base_debugmodel(
     )
 
 
-def gpt_base_debugmodel_varlen(
+def gpt_trainstation_debugmodel_varlen(
     seq_len: int | None = DEFAULT_DEBUG_MODEL_SEQ_LEN,
 ) -> Trainer.Config:
-    config = gpt_base_debugmodel(seq_len=seq_len)
+    config = gpt_trainstation_debugmodel(seq_len=seq_len)
     config.model_spec = model_registry(
         "debugmodel", seq_len=seq_len, attn_backend="varlen"
     )
@@ -128,7 +128,7 @@ def dist_muon_optimizer(
     if parallelism.tensor_parallel_degree > 1:
         raise ValueError("DistMuon requires tensor_parallel_degree=1.")
 
-    model_config = cast(GptBaseModel.Config, model_spec.model)
+    model_config = cast(GptTrainstationModel.Config, model_spec.model)
     owned = ComputeLayout(
         shardings_by_mesh_axis={MeshAxisName.DP_SHARD.value: Owned()},
     )

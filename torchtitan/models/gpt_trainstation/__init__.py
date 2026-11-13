@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""GptBase: one decoder that mixes every shared layer type, for test coverage.
+"""GptTrainstation: one decoder that mixes every shared layer type, for test coverage.
 
 The debug flavor repeats a four-layer pattern so that every pipeline stage of a
 2- or 4-stage split sees every layer type:
@@ -54,12 +54,12 @@ from torchtitan.models.deepseek_v3 import (
 from torchtitan.models.qwen3.parallelize import parallelize_qwen3
 from torchtitan.protocols.model_spec import ModelSpec
 
-from .model import GptBaseModel, GptBaseTransformerBlock
+from .model import GptTrainstationModel, GptTrainstationTransformerBlock
 
 __all__ = [
-    "GptBaseModel",
-    "GptBaseTransformerBlock",
-    "gpt_base_configs",
+    "GptTrainstationModel",
+    "GptTrainstationTransformerBlock",
+    "gpt_trainstation_configs",
     "model_registry",
 ]
 
@@ -162,7 +162,7 @@ def _debugmodel(
     non_blocking_capacity_factor: float | None = None,
     *,
     seq_len: int,
-) -> GptBaseModel.Config:
+) -> GptTrainstationModel.Config:
     dim = 256
     n_layers = 8
     vocab_size = 2048
@@ -244,7 +244,7 @@ def _debugmodel(
             )
 
         layers.append(
-            GptBaseTransformerBlock.Config(
+            GptTrainstationTransformerBlock.Config(
                 attention=attention,
                 attention_norm=_norm(dim),
                 ffn_norm=_norm(dim),
@@ -253,7 +253,7 @@ def _debugmodel(
             )
         )
 
-    return GptBaseModel.Config(
+    return GptTrainstationModel.Config(
         dim=dim,
         vocab_size=vocab_size,
         tok_embeddings=Embedding.Config(
@@ -267,7 +267,7 @@ def _debugmodel(
     )
 
 
-gpt_base_configs = {
+gpt_trainstation_configs = {
     "debugmodel": (_debugmodel, 4096),
 }
 
@@ -287,7 +287,7 @@ def model_registry(
     non_blocking_capacity_factor: float | None = None,
     converters: list[ModelConfigConverter.Config] | None = None,
 ) -> ModelSpec:
-    get_config, max_context_len = gpt_base_configs[flavor]
+    get_config, max_context_len = gpt_trainstation_configs[flavor]
     context_len = seq_len or max_context_len
     if context_len > max_context_len:
         raise ValueError(
@@ -305,7 +305,7 @@ def model_registry(
         for c in converters:
             config = c.build().convert(config)
     return ModelSpec(
-        name="gpt_base",
+        name="gpt_trainstation",
         flavor=flavor,
         model=config,
         max_context_length=context_len,
